@@ -47,40 +47,45 @@ async def list_orders(page: int = 1, page_size: int = 10, status: str = None):
     offset = (page - 1) * page_size
     try:
         with get_db_cursor() as cur:
-            # 修复：status=all 时查全部
-            if status and status != 'all':
-                cur.execute("SELECT COUNT(*) FROM orders WHERE status = %s", (status,))
-            else:
-                cur.execute("SELECT COUNT(*) FROM orders")
+            where = "WHERE o.status = %s" if status and status != 'all' else ""
+            count_params = [status] if where else []
+            cur.execute(f"SELECT COUNT(*) FROM orders o {where}", count_params)
             total = cur.fetchone()["count"]
-            
-            if status and status != 'all':
-                cur.execute(
-                    """SELECT o.id, o.status, o.total_amount, o.created_at,
-                              json_agg(json_build_object('name', p.name, 'quantity', oi.quantity, 'price', oi.price)) as items
-                       FROM orders o
-                       LEFT JOIN order_items oi ON o.id = oi.order_id
-                       LEFT JOIN products p ON oi.product_id = p.id
-                       WHERE o.status = %s
-                       GROUP BY o.id ORDER BY o.created_at DESC LIMIT %s OFFSET %s""",
-                    (status, page_size, offset))
-            else:
-                cur.execute(
-                    """SELECT o.id, o.status, o.total_amount, o.created_at,
-                              json_agg(json_build_object('name', p.name, 'quantity', oi.quantity, 'price', oi.price)) as items
-                       FROM orders o
-                       LEFT JOIN order_items oi ON o.id = oi.order_id
-                       LEFT JOIN products p ON oi.product_id = p.id
-                       GROUP BY o.id ORDER BY o.created_at DESC LIMIT %s OFFSET %s""",
-                    (page_size, offset))
+            params = count_params + [page_size, offset]
+            cur.execute(f"""
+                SELECT o.id, o.order_no, o.status, o.total_amount, o.pay_amount, o.buyer_note,
+                       o.created_at, o.delivery_company, o.delivery_no,
+                       COALESCE(a.receiver_name, '') AS receiver_name,
+                       COALESCE(a.phone, '') AS receiver_phone,
+                       TRIM(CONCAT_WS('', a.province, a.city, a.district, a.detail_address)) AS shipping_address,
+                       COALESCE(json_agg(
+                           json_build_object(
+                               'name', oi.product_name,
+                               'quantity', oi.quantity,
+                               'price', oi.price,
+                               'image', oi.product_image
+                           )
+                       ) FILTER (WHERE oi.id IS NOT NULL), '[]') AS items
+                FROM orders o
+                LEFT JOIN addresses a ON o.address_id = a.id
+                LEFT JOIN order_items oi ON o.id = oi.order_id
+                {where}
+                GROUP BY o.id, a.receiver_name, a.phone, a.province, a.city, a.district, a.detail_address
+                ORDER BY o.created_at DESC LIMIT %s OFFSET %s
+            """, params)
             rows = cur.fetchall()
             orders = [{
-                "id": r["id"],
+                "id": str(r["id"]),
+                "order_no": r["order_no"] or str(r["id"]),
                 "status": r["status"],
                 "total_amount": float(r["total_amount"] or 0),
+                "pay_amount": float(r["pay_amount"] or 0),
                 "receiver_name": r["receiver_name"] or "",
                 "receiver_phone": r["receiver_phone"] or "",
                 "shipping_address": r["shipping_address"] or "",
+                "buyer_note": r["buyer_note"] or "",
+                "delivery_company": r["delivery_company"] or "",
+                "delivery_no": r["delivery_no"] or "",
                 "items": r["items"] or [],
                 "created_at": r["created_at"].isoformat() if r["created_at"] else ""
             } for r in rows]
@@ -90,12 +95,12 @@ async def list_orders(page: int = 1, page_size: int = 10, status: str = None):
 
 @router.put("/orders/{order_id}/status")
 async def update_order_status(order_id: str, status: str):
-    """更新订单状态：ship（发货）/refund（退款）/cancel（取消）"""
+    """更新订单状态：shipped（发货）/refunded（退款）/cancelled（取消）"""
     allowed = {"shipped": "shipped", "refunded": "refunded", "cancelled": "cancelled"}
     if status not in allowed:
         raise HTTPException(status_code=400, detail="无效状态")
     try:
-        with get_db_cursor(commit=True) as cur:
+        with get_db_cursor() as cur:
             cur.execute("UPDATE orders SET status = %s, updated_at = NOW() WHERE id = %s", (allowed[status], order_id))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="订单不存在")
@@ -111,60 +116,62 @@ async def list_users(page: int = 1, page_size: int = 10, keyword: str = None):
     offset = (page - 1) * page_size
     try:
         with get_db_cursor() as cur:
-            if keyword:
-                cur.execute("SELECT COUNT(*) FROM users WHERE nickname LIKE %s OR phone LIKE %s", (f"%{keyword}%", f"%{keyword}%"))
-            else:
-                cur.execute("SELECT COUNT(*) FROM users")
+            where = "WHERE u.nickname ILIKE %s OR u.phone ILIKE %s" if keyword else ""
+            count_params = [f"%{keyword}%", f"%{keyword}%"] if keyword else []
+            cur.execute(f"SELECT COUNT(*) FROM users u {where}", count_params)
             total = cur.fetchone()["count"]
-            if keyword:
-                cur.execute(
-                    """SELECT id, nickname, phone, points, total_spent, order_count, created_at
-                       FROM users WHERE nickname LIKE %s OR phone LIKE %s
-                       ORDER BY created_at DESC LIMIT %s OFFSET %s""",
-                    (f"%{keyword}%", f"%{keyword}%", page_size, offset))
-            else:
-                cur.execute(
-                    """SELECT id, nickname, phone, points, total_spent, order_count, created_at
-                       FROM users ORDER BY created_at DESC LIMIT %s OFFSET %s""",
-                    (page_size, offset))
+            params = count_params + [page_size, offset]
+            cur.execute(f"""
+                SELECT u.id, u.nickname, u.phone, u.member_level, u.total_points, u.available_points, u.created_at,
+                       COALESCE(SUM(o.total_amount) FILTER (WHERE o.status NOT IN ('cancelled','refunded')), 0) AS total_spent,
+                       COUNT(o.id) AS order_count
+                FROM users u
+                LEFT JOIN orders o ON o.user_id = u.id
+                {where}
+                GROUP BY u.id
+                ORDER BY u.created_at DESC LIMIT %s OFFSET %s
+            """, params)
             rows = cur.fetchall()
             users = [{
-                "id": r["id"],
-                "nickname": r["nickname"] or f"用户{r['id']}",
-                "phone": r["phone"],
-                "points": r["points"] or 0,
+                "id": str(r["id"]),
+                "nickname": r["nickname"] or f"用户{str(r['id'])[:8]}",
+                "phone": r["phone"] or "",
+                "member_level": r["member_level"] or "normal",
+                "total_points": r["total_points"] or 0,
+                "available_points": r["available_points"] or 0,
+                "points": r["available_points"] or 0,
                 "total_spent": float(r["total_spent"] or 0),
                 "order_count": r["order_count"] or 0,
                 "created_at": r["created_at"].isoformat() if r["created_at"] else ""
             } for r in rows]
             return {"items": users, "total": total}
-    except Exception:
-        return {"items": [], "total": 0}
+    except Exception as e:
+        return {"items": [], "total": 0, "error": str(e)}
 
 @router.get("/users/{user_id}/points")
-async def get_user_points(user_id: int):
+async def get_user_points(user_id: str):
     try:
         with get_db_cursor() as cur:
-            cur.execute("SELECT points FROM users WHERE id = %s", (user_id,))
+            cur.execute("SELECT available_points FROM users WHERE id = %s", (user_id,))
             r = cur.fetchone()
             if not r:
                 raise HTTPException(status_code=404, detail="用户不存在")
-            return {"points": r["points"] or 0}
+            return {"points": r["available_points"] or 0}
     except HTTPException:
         raise
-    except:
+    except Exception:
         return {"points": 0}
 
 @router.put("/users/{user_id}/points")
-async def adjust_user_points(user_id: int, points_delta: int = Query(..., description="积分变化量，正数增加，负数减少")):
+async def adjust_user_points(user_id: str, points_delta: int = Query(..., description="积分变化量，正数增加，负数减少")):
     """调整用户积分"""
     try:
-        with get_db_cursor(commit=True) as cur:
-            cur.execute("UPDATE users SET points = GREATEST(0, points + %s) WHERE id = %s", (points_delta, user_id))
+        with get_db_cursor() as cur:
+            cur.execute("UPDATE users SET available_points = GREATEST(0, available_points + %s), total_points = GREATEST(0, total_points + GREATEST(%s, 0)) WHERE id = %s", (points_delta, points_delta, user_id))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="用户不存在")
-            cur.execute("SELECT points FROM users WHERE id = %s", (user_id,))
-            new_points = cur.fetchone()["points"]
+            cur.execute("SELECT available_points FROM users WHERE id = %s", (user_id,))
+            new_points = cur.fetchone()["available_points"]
         return {"success": True, "points": new_points}
     except HTTPException:
         raise
@@ -266,7 +273,7 @@ async def generate_product_image(product_name: str, category: str = ""):
 async def upload_product_image(file: UploadFile = File(...)):
     """接收商品图片上传，保存到 static/uploads/ 目录"""
     import os
-    upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "static", "uploads")
+    upload_dir = "/home/ubuntu/liangmu-forest/backend/static/uploads"
     os.makedirs(upload_dir, exist_ok=True)
     
     ext = os.path.splitext(file.filename)[1] or ".jpg"

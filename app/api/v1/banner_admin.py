@@ -8,7 +8,7 @@ import shutil
 
 router = APIRouter(prefix="/admin/banners", tags=["admin-banner"])
 
-UPLOAD_DIR = "/home/ubuntu/liangmu-forest/frontend/dist/assets/banners"
+UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/banners"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 class BannerCreate(BaseModel):
