@@ -1,0 +1,54 @@
+"""首页模块API"""
+from fastapi import APIRouter
+from app.utils.response import success_response
+from app.database import get_db_cursor
+
+router = APIRouter()
+
+@router.get("/home/banners")
+async def get_banners():
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT id, title, image_url, link_type, link_value FROM banners WHERE is_active = true ORDER BY sort_order ASC")
+        banners = cursor.fetchall()
+    items = [{"id": str(b["id"]), "title": b["title"], "image": b["image_url"] or "", "link_type": b["link_type"] or "none", "link_value": b["link_value"] or ""} for b in banners]
+    return success_response(data={"items": items})
+
+@router.get("/home/categories")
+async def get_home_categories():
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT id, name, icon_url, sort_order FROM categories WHERE is_active = true ORDER BY sort_order ASC")
+        categories = cursor.fetchall()
+    items = [{"id": str(c["id"]), "name": c["name"], "icon": c["icon_url"] or "", "sort_order": c["sort_order"]} for c in categories]
+    return success_response(data={"items": items})
+
+@router.get("/home/new")
+async def get_home_new(limit: int = 10):
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT id, name, subtitle, price, original_price, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY created_at DESC LIMIT %s", (limit,))
+        products = cursor.fetchall()
+    items = []
+    for p in products:
+        images = p["images"] or []
+        items.append({
+            "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
+            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "main_image": images[0] if images else "",
+            "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
+        })
+    return success_response(data={"items": items})
+
+@router.get("/home/recommend")
+async def get_home_recommend(limit: int = 10):
+    with get_db_cursor() as cursor:
+        cursor.execute("SELECT id, name, subtitle, price, original_price, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY RANDOM() LIMIT %s", (limit,))
+        products = cursor.fetchall()
+    items = []
+    for p in products:
+        images = p["images"] or []
+        items.append({
+            "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
+            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "main_image": images[0] if images else "",
+            "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
+        })
+    return success_response(data={"items": items})
