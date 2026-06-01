@@ -55,9 +55,9 @@ async def list_orders(page: int = 1, page_size: int = 10, status: str = None):
             cur.execute(f"""
                 SELECT o.id, o.order_no, o.status, o.total_amount, o.pay_amount, o.buyer_note,
                        o.created_at, o.delivery_company, o.delivery_no,
-                       COALESCE(a.receiver_name, '') AS receiver_name,
-                       COALESCE(a.phone, '') AS receiver_phone,
-                       TRIM(CONCAT_WS('', a.province, a.city, a.district, a.detail_address)) AS shipping_address,
+                       COALESCE(NULLIF(o.receiver_name, ''), a.receiver_name, '') AS receiver_name,
+                       COALESCE(NULLIF(o.receiver_phone, ''), a.phone, '') AS receiver_phone,
+                       COALESCE(NULLIF(o.shipping_address, ''), TRIM(CONCAT_WS('', a.province, a.city, a.district, a.detail_address)), '') AS shipping_address,
                        COALESCE(json_agg(
                            json_build_object(
                                'name', oi.product_name,

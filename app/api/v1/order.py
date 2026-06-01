@@ -32,6 +32,21 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
     items_data = body.get("items", [])
     if not items_data:
         return error_response(1001, "缺少商品信息")
+    receiver_name = ""
+    receiver_phone = ""
+    shipping_address = ""
+    if address_id:
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                "SELECT receiver_name, phone, province, city, district, detail_address FROM addresses WHERE id = %s AND user_id = %s",
+                (address_id, user_id)
+            )
+            addr = cursor.fetchone()
+        if not addr:
+            return error_response(2005, "收货地址不存在")
+        receiver_name = addr["receiver_name"] or ""
+        receiver_phone = addr["phone"] or ""
+        shipping_address = f"{addr['province']}{addr['city']}{addr['district']}{addr['detail_address']}"
     order_items = []
     total_amount = 0.0
     with get_db_cursor() as cursor:
@@ -78,7 +93,7 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
     order_id = str(uuid.uuid4())
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("""INSERT INTO orders (id, order_no, user_id, address_id, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, points_earned, points_used, delivery_type, status, buyer_note, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (order_id, order_no, user_id, address_id, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, int(total_amount), points_used, delivery_type, "pending", body.get("buyer_note", ""), datetime.now()))
+        cursor.execute("""INSERT INTO orders (id, order_no, user_id, address_id, receiver_name, receiver_phone, shipping_address, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, points_earned, points_used, delivery_type, status, buyer_note, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (order_id, order_no, user_id, address_id, receiver_name, receiver_phone, shipping_address, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, int(total_amount), points_used, delivery_type, "pending", body.get("buyer_note", ""), datetime.now()))
         for item in order_items:
             cursor.execute("""INSERT INTO order_items (id, order_id, product_id, product_name, product_image, sku_spec, price, quantity, subtotal) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)""", (str(uuid.uuid4()), order_id, item["product_id"], item["product_name"], item["product_image"], json.dumps(item["sku_spec"]), item["price"], item["quantity"], item["subtotal"]))
             cursor.execute("UPDATE products SET stock = stock - %s, sales_count = sales_count + %s WHERE id = %s", (item["quantity"], item["quantity"], item["product_id"]))
@@ -120,19 +135,25 @@ async def get_orders(user: dict = Depends(get_current_user), status: str = "all"
 async def get_order_detail(order_id: str, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     with get_db_cursor() as cursor:
-        cursor.execute("""SELECT id, order_no, status, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, points_earned, points_used, delivery_type, delivery_no, delivery_company, pay_time, deliver_time, receive_time, buyer_note, created_at FROM orders WHERE id = %s AND user_id = %s""", (order_id, user_id))
+        cursor.execute("""SELECT id, order_no, address_id, receiver_name, receiver_phone, shipping_address, status, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, points_earned, points_used, delivery_type, delivery_no, delivery_company, pay_time, deliver_time, receive_time, buyer_note, created_at FROM orders WHERE id = %s AND user_id = %s""", (order_id, user_id))
         order = cursor.fetchone()
     if not order:
         return error_response(2003, "订单不存在")
-    with get_db_cursor() as cursor:
-        cursor.execute("SELECT receiver_name, phone, province, city, district, detail_address FROM addresses WHERE id = %s", (str(order["address_id"]),))
-        addr = cursor.fetchone()
     address = None
-    if addr:
-        phone = addr["phone"]
+    if order.get("receiver_name") or order.get("shipping_address"):
+        phone = order["receiver_phone"] or ""
         if phone and len(phone) >= 7:
             phone = phone[:3] + "****" + phone[-4:]
-        address = {"receiver_name": addr["receiver_name"], "phone": phone, "full_address": f"{addr['province']}{addr['city']}{addr['district']}{addr['detail_address']}"}
+        address = {"receiver_name": order["receiver_name"] or "", "phone": phone, "full_address": order["shipping_address"] or ""}
+    elif order.get("address_id"):
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT receiver_name, phone, province, city, district, detail_address FROM addresses WHERE id = %s", (str(order["address_id"]),))
+            addr = cursor.fetchone()
+        if addr:
+            phone = addr["phone"]
+            if phone and len(phone) >= 7:
+                phone = phone[:3] + "****" + phone[-4:]
+            address = {"receiver_name": addr["receiver_name"], "phone": phone, "full_address": f"{addr['province']}{addr['city']}{addr['district']}{addr['detail_address']}"}
     with get_db_cursor() as cursor:
         cursor.execute("SELECT product_name, product_image, sku_spec, price, quantity, subtotal FROM order_items WHERE order_id = %s", (order_id,))
         order_items = cursor.fetchall()
