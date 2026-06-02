@@ -43,15 +43,39 @@ async def get_stats():
 
 # ===== 订单管理 =====
 @router.get("/orders")
-async def list_orders(page: int = 1, page_size: int = 10, status: str = None):
+async def list_orders(page: int = 1, page_size: int = 10, status: str = None, keyword: str = None):
     offset = (page - 1) * page_size
     try:
         with get_db_cursor() as cur:
-            where = "WHERE o.status = %s" if status and status != 'all' else ""
-            count_params = [status] if where else []
-            cur.execute(f"SELECT COUNT(*) FROM orders o {where}", count_params)
+            conditions = []
+            query_params = []
+            if status and status != 'all':
+                conditions.append("o.status = %s")
+                query_params.append(status)
+            if keyword and keyword.strip():
+                like = f"%{keyword.strip()}%"
+                conditions.append("""(
+                    o.order_no ILIKE %s OR
+                    COALESCE(o.receiver_name, '') ILIKE %s OR
+                    COALESCE(o.receiver_phone, '') ILIKE %s OR
+                    COALESCE(o.shipping_address, '') ILIKE %s OR
+                    COALESCE(a.receiver_name, '') ILIKE %s OR
+                    COALESCE(a.phone, '') ILIKE %s OR
+                    TRIM(CONCAT_WS('', a.province, a.city, a.district, a.detail_address)) ILIKE %s OR
+                    EXISTS (
+                        SELECT 1 FROM order_items oi2
+                        WHERE oi2.order_id = o.id AND COALESCE(oi2.product_name, '') ILIKE %s
+                    )
+                )""")
+                query_params.extend([like] * 8)
+            where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            cur.execute(f"""
+                SELECT COUNT(*) FROM orders o
+                LEFT JOIN addresses a ON o.address_id = a.id
+                {where}
+            """, query_params)
             total = cur.fetchone()["count"]
-            params = count_params + [page_size, offset]
+            params = query_params + [page_size, offset]
             cur.execute(f"""
                 SELECT o.id, o.order_no, o.status, o.total_amount, o.pay_amount, o.buyer_note,
                        o.created_at, o.delivery_company, o.delivery_no,

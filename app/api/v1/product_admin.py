@@ -34,19 +34,22 @@ async def list_products(page: int = 1, page_size: int = 10, keyword: str = None,
     with get_db_cursor() as cur:
         conditions = []
         params = []
-        if keyword:
-            conditions.append("(name LIKE %s OR subtitle LIKE %s)")
-            params.extend([f"%{keyword}%", f"%{keyword}%"])
+        if keyword and keyword.strip():
+            like = f"%{keyword.strip()}%"
+            conditions.append("(p.name ILIKE %s OR COALESCE(p.subtitle, '') ILIKE %s OR COALESCE(c.name, '') ILIKE %s)")
+            params.extend([like, like, like])
         if category_id:
-            conditions.append("category_id = %s")
+            conditions.append("p.category_id = %s")
             params.append(category_id)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        cur.execute(f"SELECT COUNT(*) FROM products {where}", params)
+        cur.execute(f"""SELECT COUNT(*) FROM products p
+                        LEFT JOIN categories c ON p.category_id = c.id
+                        {where}""", params)
         total = cur.fetchone()["count"]
-        params.extend([page_size, offset])
+        list_params = params + [page_size, offset]
         cur.execute(f"""SELECT p.*, c.name as category_name
                         FROM products p LEFT JOIN categories c ON p.category_id = c.id
-                        {where} ORDER BY p.created_at DESC LIMIT %s OFFSET %s""", params)
+                        {where} ORDER BY p.created_at DESC LIMIT %s OFFSET %s""", list_params)
         rows = cur.fetchall()
         items = [{
             "id": str(r["id"]), "category_id": str(r["category_id"]) if r["category_id"] else "",
