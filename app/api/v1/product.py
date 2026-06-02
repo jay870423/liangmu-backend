@@ -35,17 +35,18 @@ async def list_products(category_id: str = "", page: int = 1, page_size: int = 2
             cursor.execute("""
                 SELECT id, name, subtitle, price, original_price, images, sales_count, rating
                 FROM products WHERE is_on_sale = true AND category_id = %s
-                ORDER BY sort_order DESC, created_at DESC LIMIT %s OFFSET %s
+                ORDER BY created_at DESC LIMIT %s OFFSET %s
             """, (category_id, page_size, offset))
+            products = cursor.fetchall()
             cursor.execute("SELECT COUNT(*) as total FROM products WHERE is_on_sale = true AND category_id = %s", (category_id,))
         else:
             cursor.execute("""
                 SELECT id, name, subtitle, price, original_price, images, sales_count, rating
                 FROM products WHERE is_on_sale = true
-                ORDER BY sort_order DESC, created_at DESC LIMIT %s OFFSET %s
+                ORDER BY created_at DESC LIMIT %s OFFSET %s
             """, (page_size, offset))
+            products = cursor.fetchall()
             cursor.execute("SELECT COUNT(*) as total FROM products WHERE is_on_sale = true")
-        products = cursor.fetchall()
         total = cursor.fetchone()["total"]
     items = []
     for p in products:
