@@ -16,7 +16,9 @@ async def wechat_login(req: Request):
     if not code:
         return error_response(1001, "缺少登录code")
     from app.config import settings
-    wechat_url = f"https://api.weixin.qq.com/sns/jscode2session?appid={settings.WX_APPID}&secret={settings.WX_SECRET}&js_code={code}&grant_type=authorization_code"
+    if not settings.wechat_appid or not settings.wechat_secret:
+        return error_response(1000, "微信登录配置未完成")
+    wechat_url = f"https://api.weixin.qq.com/sns/jscode2session?appid={settings.wechat_appid}&secret={settings.wechat_secret}&js_code={code}&grant_type=authorization_code"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(wechat_url)
@@ -25,7 +27,7 @@ async def wechat_login(req: Request):
         return error_response(1000, "微信服务调用失败")
     openid = wechat_data.get("openid")
     if not openid:
-        return error_response(1000, "微信登录失败，无openid")
+        return error_response(1000, wechat_data.get("errmsg") or "微信登录失败，无openid")
     with get_db_cursor() as cursor:
         cursor.execute("SELECT * FROM users WHERE openid = %s", (openid,))
         user = cursor.fetchone()

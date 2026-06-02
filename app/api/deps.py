@@ -17,9 +17,8 @@ async def get_current_user(authorization: Optional[str] = Header(None, alias="Au
         raise HTTPException(status_code=401, detail=error_response(1002, "无效的认证格式"))
 
     token = parts[1]
-    settings = settings
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         user_id = payload.get("sub")
         username = payload.get("username", "")
         if user_id is None:
@@ -31,7 +30,6 @@ async def get_current_user(authorization: Optional[str] = Header(None, alias="Au
 
 def create_access_token(user_id: str, username: str = "") -> str:
     from datetime import datetime, timedelta
-    settings = settings
-    expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.utcnow() + timedelta(days=settings.access_token_expire_days)
     payload = {"sub": user_id, "username": username, "exp": expire}
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
