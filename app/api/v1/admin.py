@@ -72,13 +72,18 @@ async def list_orders(page: int = 1, page_size: int = 10, status: str = None, ke
             cur.execute(f"""
                 SELECT COUNT(*) FROM orders o
                 LEFT JOIN addresses a ON o.address_id = a.id
+                LEFT JOIN users u ON o.user_id = u.id
                 {where}
             """, query_params)
             total = cur.fetchone()["count"]
             params = query_params + [page_size, offset]
             cur.execute(f"""
-                SELECT o.id, o.order_no, o.status, o.total_amount, o.pay_amount, o.buyer_note,
+                SELECT o.id, o.order_no, o.user_id, o.status, o.total_amount, o.pay_amount, o.buyer_note,
                        o.created_at, o.delivery_company, o.delivery_no,
+                       COALESCE(u.nickname, '') AS user_nickname,
+                       COALESCE(u.phone, '') AS user_phone,
+                       COALESCE(u.member_level, '') AS user_member_level,
+                       COALESCE(u.openid, '') AS user_openid,
                        COALESCE(NULLIF(o.receiver_name, ''), a.receiver_name, '') AS receiver_name,
                        COALESCE(NULLIF(o.receiver_phone, ''), a.phone, '') AS receiver_phone,
                        COALESCE(NULLIF(o.shipping_address, ''), TRIM(CONCAT_WS('', a.province, a.city, a.district, a.detail_address)), '') AS shipping_address,
@@ -92,15 +97,21 @@ async def list_orders(page: int = 1, page_size: int = 10, status: str = None, ke
                        ) FILTER (WHERE oi.id IS NOT NULL), '[]') AS items
                 FROM orders o
                 LEFT JOIN addresses a ON o.address_id = a.id
+                LEFT JOIN users u ON o.user_id = u.id
                 LEFT JOIN order_items oi ON o.id = oi.order_id
                 {where}
-                GROUP BY o.id, a.receiver_name, a.phone, a.province, a.city, a.district, a.detail_address
+                GROUP BY o.id, u.nickname, u.phone, u.member_level, u.openid, a.receiver_name, a.phone, a.province, a.city, a.district, a.detail_address
                 ORDER BY o.created_at DESC LIMIT %s OFFSET %s
             """, params)
             rows = cur.fetchall()
             orders = [{
                 "id": str(r["id"]),
                 "order_no": r["order_no"] or str(r["id"]),
+                "user_id": str(r["user_id"]) if r["user_id"] else "",
+                "user_nickname": r["user_nickname"] or "",
+                "user_phone": r["user_phone"] or "",
+                "user_member_level": r["user_member_level"] or "",
+                "user_openid": r["user_openid"] or "",
                 "status": r["status"],
                 "total_amount": float(r["total_amount"] or 0),
                 "pay_amount": float(r["pay_amount"] or 0),
