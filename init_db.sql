@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     openid VARCHAR(64) UNIQUE NOT NULL,
     nickname VARCHAR(64) DEFAULT '',
-    avatar_url VARCHAR(256) DEFAULT '',
+    avatar_url TEXT DEFAULT '',
     phone VARCHAR(20) DEFAULT '',
     member_level VARCHAR(20) DEFAULT 'normal',
     total_points INT DEFAULT 0,
@@ -38,7 +38,7 @@ CREATE INDEX idx_addresses_user_id ON addresses(user_id);
 CREATE TABLE IF NOT EXISTS categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(64) NOT NULL,
-    icon_url VARCHAR(256) DEFAULT '',
+    icon_url TEXT DEFAULT '',
     sort_order INT DEFAULT 0,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     product_id UUID REFERENCES products(id),
     product_name VARCHAR(128) NOT NULL,
-    product_image VARCHAR(256) NOT NULL,
+    product_image TEXT NOT NULL,
     sku_spec JSONB DEFAULT '{}'::jsonb,
     price DECIMAL(10,2) NOT NULL,
     quantity INT NOT NULL,
@@ -160,9 +160,9 @@ CREATE INDEX idx_points_log_created_at ON points_log(created_at DESC);
 CREATE TABLE IF NOT EXISTS banners (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(128) NOT NULL,
-    image_url VARCHAR(256) NOT NULL,
+    image_url TEXT NOT NULL,
     link_type VARCHAR(20) DEFAULT 'none',
-    link_value VARCHAR(256) DEFAULT '',
+    link_value TEXT DEFAULT '',
     sort_order INT DEFAULT 0,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
