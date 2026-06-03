@@ -1,4 +1,5 @@
 from fastapi import Query, APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from datetime import date, datetime
 import json, secrets, httpx, os, uuid, aiofiles
@@ -257,15 +258,112 @@ def _call_minimax(prompt: str, timeout: float = 30.0) -> str:
     except Exception as e:
         return f"服务暂时不可用：{str(e)}"
 
+def _extract_stream_piece(payload):
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    return content, False
+            message = choice.get("message") or {}
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content:
+                    return content, True
+    if isinstance(payload, dict):
+        content = payload.get("content") or payload.get("text")
+        if isinstance(content, str) and content:
+            return content, False
+    return "", False
+
+async def _stream_minimax_messages(messages):
+    api_key = os.getenv("MINIMAX_API_KEY", "")
+    if not api_key:
+        yield "AI API Key is not configured."
+        return
+    emitted_text = ""
+    emitted = False
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, read=180.0)) as client:
+            async with client.stream(
+                "POST",
+                "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "MiniMax-M2.7-highspeed", "messages": messages, "stream": True},
+            ) as resp:
+                if resp.status_code >= 400:
+                    detail = (await resp.aread()).decode("utf-8", errors="ignore")[:300]
+                    yield f"AI service unavailable: {detail or resp.status_code}"
+                    return
+                async for line in resp.aiter_lines():
+                    line = (line or "").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if line == "[DONE]":
+                        break
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    piece, is_full = _extract_stream_piece(payload)
+                    if not piece:
+                        continue
+                    if is_full:
+                        if piece == emitted_text or piece.strip() == emitted_text.strip() or piece in emitted_text:
+                            chunk = ""
+                        elif piece.startswith(emitted_text):
+                            chunk = piece[len(emitted_text):]
+                            emitted_text = piece
+                        elif emitted_text and emitted_text.strip() and emitted_text.strip() in piece:
+                            idx = piece.find(emitted_text.strip())
+                            chunk = piece[idx + len(emitted_text.strip()):]
+                            emitted_text += chunk
+                        else:
+                            chunk = piece
+                            emitted_text += chunk
+                    else:
+                        chunk = piece
+                        emitted_text += chunk
+                    if chunk:
+                        emitted = True
+                        yield chunk
+        if not emitted:
+            yield "Done"
+    except Exception as e:
+        yield f"AI service unavailable: {str(e)}"
+
+def _stream_response(messages):
+    return StreamingResponse(
+        _stream_minimax_messages(messages),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 @router.get("/ai/analyze")
 async def ai_analyze(type: str = Query(...), data: str = Query("{}")):
     prompt = f"作为电商运营专家，分析以下数据并给出建议：\n{data}"
     return {"analysis": _call_minimax(prompt)}
 
+@router.get("/ai/analyze/stream")
+async def ai_analyze_stream(type: str = Query(...), data: str = Query("{}")):
+    prompt = f"Please answer in Chinese. As an ecommerce operations expert, analyze this dashboard data and give practical suggestions:\n{data}"
+    return _stream_response([{"role": "user", "content": prompt}])
+
 @router.get("/ai/generate_desc")
 async def generate_product_desc(product_name: str, category: str):
     prompt = f"为'{product_name}'（分类：{category}）写一段50-100字的商品描述，突出材质、工艺、收藏价值。语气高端典雅。"
     return {"description": _call_minimax(prompt)}
+
+@router.get("/ai/generate_desc/stream")
+async def generate_product_desc_stream(product_name: str, category: str):
+    prompt = f"Please answer in Chinese. Write a 50-100 Chinese character premium product description for product '{product_name}' in category '{category}'. Highlight material, craft, and collection value."
+    return _stream_response([{"role": "user", "content": prompt}])
 
 class AICallReq(BaseModel):
     message: str
@@ -294,10 +392,24 @@ async def ai_chat(req: AICallReq):
     except Exception as e:
         return {"message": f"服务暂时不可用：{str(e)}"}
 
+@router.post("/ai/chat/stream")
+async def ai_chat_stream(req: AICallReq):
+    system_prompt = "You are the AI operations assistant for Xiaoji micro mall. Reply in Chinese. Help analyze sales data, answer order and product questions, generate marketing copy, and provide practical operations suggestions."
+    messages = [{"role": "system", "content": system_prompt}]
+    if req.context:
+        messages.append({"role": "user", "content": req.context})
+    messages.append({"role": "user", "content": req.message})
+    return _stream_response(messages)
+
 @router.post("/ai/predict")
 async def ai_predict(type: str, data: dict):
     prompt = f"作为电商数据分析师，基于以下历史数据预测{type}趋势，给出预测结论和具体建议：\n{json.dumps(data, ensure_ascii=False)}"
     return {"prediction": _call_minimax(prompt)}
+
+@router.post("/ai/predict/stream")
+async def ai_predict_stream(type: str, data: dict):
+    prompt = f"Please answer in Chinese. As an ecommerce data analyst, predict the {type} trend from this history and provide conclusions plus concrete suggestions:\n{json.dumps(data, ensure_ascii=False)}"
+    return _stream_response([{"role": "user", "content": prompt}])
 
 # ===== 图片生成 & 上传 =====
 @router.get("/ai/generate_image")
