@@ -4,6 +4,33 @@ from datetime import date, datetime
 import json, secrets, httpx, os, uuid, aiofiles
 from app.database import get_db_cursor
 
+ASSET_UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/uploads"
+ASSET_UPLOAD_PREFIX = "/assets/uploads"
+os.makedirs(ASSET_UPLOAD_DIR, exist_ok=True)
+
+def _ext_from_content_type(content_type: str, default: str = ".jpg") -> str:
+    content_type = (content_type or "").lower()
+    if "png" in content_type:
+        return ".png"
+    if "webp" in content_type:
+        return ".webp"
+    if "svg" in content_type:
+        return ".svg"
+    if "jpeg" in content_type or "jpg" in content_type:
+        return ".jpg"
+    return default
+
+def _save_generated_image(image_url: str, prefix: str) -> str:
+    resp = httpx.get(image_url, timeout=60.0, follow_redirects=True)
+    resp.raise_for_status()
+    ext = _ext_from_content_type(resp.headers.get("content-type"), ".jpg")
+    filename = f"{prefix}_{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(ASSET_UPLOAD_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(resp.content)
+    return f"{ASSET_UPLOAD_PREFIX}/{filename}"
+
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 class LoginReq(BaseModel):
@@ -300,28 +327,22 @@ async def generate_product_image(product_name: str, category: str = ""):
         image_url = result.get("data", {}).get("image_urls", [""])[0]
         if not image_url:
             return {"image_url": "", "error": "生成失败，请重试"}
-        return {"image_url": image_url}
+        local_url = _save_generated_image(image_url, "product")
+        return {"image_url": local_url}
     except Exception as e:
         return {"image_url": "", "error": str(e)}
 
 @router.post("/upload/image")
 async def upload_product_image(file: UploadFile = File(...)):
-    """接收商品图片上传，保存到 static/uploads/ 目录"""
-    import os
-    upload_dir = "/home/ubuntu/liangmu-forest/backend/static/uploads"
-    os.makedirs(upload_dir, exist_ok=True)
-    
+    """Upload product images to /assets/uploads/."""
     ext = os.path.splitext(file.filename)[1] or ".jpg"
     if ext.lower() not in [".jpg", ".jpeg", ".png", ".webp"]:
-        raise HTTPException(status_code=400, detail="仅支持 jpg/png/webp 格式")
-    
-    filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(upload_dir, filename)
-    
+        raise HTTPException(status_code=400, detail="Only jpg/png/webp files are supported")
+    filename = f"product_{uuid.uuid4().hex}{ext.lower()}"
+    filepath = os.path.join(ASSET_UPLOAD_DIR, filename)
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="图片不能超过5MB")
+        raise HTTPException(status_code=400, detail="Image must be 5MB or smaller")
     with open(filepath, "wb") as f:
         f.write(content)
-    
-    return {"url": f"/static/uploads/{filename}"}
+    return {"url": f"{ASSET_UPLOAD_PREFIX}/{filename}"}

@@ -8,7 +8,8 @@ import shutil
 
 router = APIRouter(prefix="/admin/banners", tags=["admin-banner"])
 
-UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/banners"
+UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/uploads"
+UPLOAD_PREFIX = "/assets/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 class BannerCreate(BaseModel):
@@ -78,8 +79,10 @@ async def delete_banner(banner_id: str):
 @router.post("/upload")
 async def upload_banner(file: UploadFile = File(...)):
     ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-    filename = f"{uuid.uuid4().hex}.{ext}"
+    if ext.lower() not in ["jpg", "jpeg", "png", "webp"]:
+        raise HTTPException(status_code=400, detail="Only jpg/png/webp files are supported")
+    filename = f"banner_{uuid.uuid4().hex}.{ext.lower()}"
     path = os.path.join(UPLOAD_DIR, filename)
     with open(path, "wb") as f:
         shutil.copyfileobj(file.file, f)
-    return {"url": f"/assets/banners/{filename}"}
+    return {"url": f"{UPLOAD_PREFIX}/{filename}"}
