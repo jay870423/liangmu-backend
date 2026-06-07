@@ -100,7 +100,7 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
 
             for product_id in sorted(product_quantities.keys()):
                 cursor.execute(
-                    "SELECT id, name, price, stock, images FROM products WHERE id = %s AND is_on_sale = true FOR UPDATE",
+                    "SELECT id, name, price, shipping_fee, stock, images FROM products WHERE id = %s AND is_on_sale = true FOR UPDATE",
                     (product_id,),
                 )
                 product = cursor.fetchone()
@@ -110,6 +110,7 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
                 if product["stock"] < required_quantity:
                     raise OrderCreateError(2002, f"库存不足: {product['name']}")
                 products[product_id] = product
+                freight_amount += float(product["shipping_fee"] or 0)
 
             order_items = []
             for item_data in normalized_items:
@@ -128,7 +129,6 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
                     "subtotal": subtotal,
                 })
 
-            freight_amount = 0.0 if total_amount >= 500 else 10.0
             if coupon_id:
                 cursor.execute("""
                     SELECT uc.id AS user_coupon_id, c.discount_amount, c.min_order_amount

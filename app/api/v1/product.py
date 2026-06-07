@@ -37,7 +37,7 @@ async def search_products(keyword: str = "", page: int = 1, page_size: int = 20)
     where, params = build_search_filter(keyword.strip())
     with get_db_cursor() as cursor:
         cursor.execute(f"""
-            SELECT p.id, p.name, p.subtitle, p.price, p.original_price, p.images, p.sales_count, p.rating
+            SELECT p.id, p.name, p.subtitle, p.price, p.original_price, p.shipping_fee, p.images, p.sales_count, p.rating
             FROM products p
             LEFT JOIN categories c ON p.category_id = c.id
             {where}
@@ -57,6 +57,7 @@ async def search_products(keyword: str = "", page: int = 1, page_size: int = 20)
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
             "price": money(p["price"]), "original_price": money(p["original_price"]),
+            "shipping_fee": money(p["shipping_fee"]),
             "main_image": images[0] if images else "", "sales": p["sales_count"] or 0,
             "rating": float(p["rating"]) if p["rating"] else 5.0
         })
@@ -66,7 +67,7 @@ async def search_products(keyword: str = "", page: int = 1, page_size: int = 20)
 async def get_product_detail(product_id: str):
     with get_db_cursor() as cursor:
         cursor.execute("""
-            SELECT id, category_id, name, subtitle, description, price, original_price, stock, images, detail_images, specs, tags, sales_count, rating
+            SELECT id, category_id, name, subtitle, description, price, original_price, shipping_fee, stock, images, detail_images, specs, tags, sales_count, rating
             FROM products WHERE id = %s AND is_on_sale = true
         """, (product_id,))
         product = cursor.fetchone()
@@ -77,6 +78,7 @@ async def get_product_detail(product_id: str):
         "id": str(product["id"]), "name": product["name"], "subtitle": product["subtitle"] or "",
         "description": product["description"] or "", "price": money(product["price"]),
         "original_price": money(product["original_price"]),
+        "shipping_fee": money(product["shipping_fee"]),
         "stock": product["stock"] or 0, "main_image": images[0] if images else "",
         "images": images, "detail_images": product["detail_images"] or [],
         "specs": product["specs"] or [], "tags": product["tags"] or [],
@@ -90,7 +92,7 @@ async def list_products(category_id: str = "", page: int = 1, page_size: int = 2
     with get_db_cursor() as cursor:
         if category_id:
             cursor.execute("""
-                SELECT id, name, subtitle, price, original_price, images, sales_count, rating
+                SELECT id, name, subtitle, price, original_price, shipping_fee, images, sales_count, rating
                 FROM products WHERE is_on_sale = true AND category_id = %s
                 ORDER BY created_at DESC LIMIT %s OFFSET %s
             """, (category_id, page_size, offset))
@@ -98,7 +100,7 @@ async def list_products(category_id: str = "", page: int = 1, page_size: int = 2
             cursor.execute("SELECT COUNT(*) as total FROM products WHERE is_on_sale = true AND category_id = %s", (category_id,))
         else:
             cursor.execute("""
-                SELECT id, name, subtitle, price, original_price, images, sales_count, rating
+                SELECT id, name, subtitle, price, original_price, shipping_fee, images, sales_count, rating
                 FROM products WHERE is_on_sale = true
                 ORDER BY created_at DESC LIMIT %s OFFSET %s
             """, (page_size, offset))
@@ -111,6 +113,7 @@ async def list_products(category_id: str = "", page: int = 1, page_size: int = 2
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
             "price": money(p["price"]), "original_price": money(p["original_price"]),
+            "shipping_fee": money(p["shipping_fee"]),
             "main_image": images[0] if images else "", "sales": p["sales_count"] or 0,
             "rating": float(p["rating"]) if p["rating"] else 5.0
         })

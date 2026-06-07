@@ -12,7 +12,7 @@ router = APIRouter()
 async def get_cart(user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     with get_db_cursor() as cursor:
-        cursor.execute("SELECT ci.id, ci.product_id, ci.quantity, ci.sku_spec, p.name as product_name, p.price, p.images, p.stock FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.user_id = %s ORDER BY ci.created_at DESC", (user_id,))
+        cursor.execute("SELECT ci.id, ci.product_id, ci.quantity, ci.sku_spec, p.name as product_name, p.price, p.shipping_fee, p.images, p.stock FROM cart_items ci JOIN products p ON ci.product_id = p.id WHERE ci.user_id = %s ORDER BY ci.created_at DESC", (user_id,))
         items = cursor.fetchall()
     result_items = []
     total_amount = 0.0
@@ -22,7 +22,7 @@ async def get_cart(user: dict = Depends(get_current_user)):
         price = float(item["price"]) if item["price"] else 0.0
         quantity = item["quantity"] or 1
         subtotal = price * quantity
-        result_items.append({"id": str(item["id"]), "product_id": str(item["product_id"]), "product_name": item["product_name"], "product_image": images[0] if images else "", "sku_spec": item["sku_spec"] or {}, "price": str(item["price"]), "quantity": quantity, "subtotal": f"{subtotal:.2f}", "stock": item["stock"] or 0})
+        result_items.append({"id": str(item["id"]), "product_id": str(item["product_id"]), "product_name": item["product_name"], "product_image": images[0] if images else "", "sku_spec": item["sku_spec"] or {}, "price": str(item["price"]), "shipping_fee": f"{float(item['shipping_fee'] or 0):.2f}", "quantity": quantity, "subtotal": f"{subtotal:.2f}", "stock": item["stock"] or 0})
         total_amount += subtotal
         total_count += quantity
     return success_response(data={"items": result_items, "total_amount": f"{total_amount:.2f}", "total_count": total_count})

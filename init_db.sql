@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS products (
     description TEXT DEFAULT '',
     price DECIMAL(10,2) NOT NULL,
     original_price DECIMAL(10,2) DEFAULT 0,
+    shipping_fee DECIMAL(10,2) DEFAULT 0,
     stock INT DEFAULT 0,
     images JSONB DEFAULT '[]'::jsonb,
     detail_images JSONB DEFAULT '[]'::jsonb,

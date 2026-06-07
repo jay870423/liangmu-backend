@@ -67,7 +67,7 @@ async def get_home_categories():
 @router.get("/home/new")
 async def get_home_new(limit: int = 10):
     with get_db_cursor() as cursor:
-        cursor.execute("SELECT id, name, subtitle, price, original_price, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY created_at DESC LIMIT %s", (limit,))
+        cursor.execute("SELECT id, name, subtitle, price, original_price, shipping_fee, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY created_at DESC LIMIT %s", (limit,))
         products = cursor.fetchall()
     items = []
     for p in products:
@@ -75,6 +75,7 @@ async def get_home_new(limit: int = 10):
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
             "price": money(p["price"]), "original_price": money(p["original_price"]),
+            "shipping_fee": money(p["shipping_fee"]),
             "main_image": images[0] if images else "",
             "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
         })
@@ -83,7 +84,7 @@ async def get_home_new(limit: int = 10):
 @router.get("/home/recommend")
 async def get_home_recommend(limit: int = 10):
     with get_db_cursor() as cursor:
-        cursor.execute("SELECT id, name, subtitle, price, original_price, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY RANDOM() LIMIT %s", (limit,))
+        cursor.execute("SELECT id, name, subtitle, price, original_price, shipping_fee, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY RANDOM() LIMIT %s", (limit,))
         products = cursor.fetchall()
     items = []
     for p in products:
@@ -91,6 +92,7 @@ async def get_home_recommend(limit: int = 10):
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
             "price": money(p["price"]), "original_price": money(p["original_price"]),
+            "shipping_fee": money(p["shipping_fee"]),
             "main_image": images[0] if images else "",
             "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
         })
