@@ -14,6 +14,7 @@ class ProductCreate(BaseModel):
     original_price: float = 0
     images: List[str] = []
     stock: int = 0
+    rating: float = 5.0
     is_on_sale: bool = True
 
 class ProductUpdate(BaseModel):
@@ -25,7 +26,13 @@ class ProductUpdate(BaseModel):
     original_price: Optional[float] = None
     images: Optional[List[str]] = None
     stock: Optional[int] = None
+    rating: Optional[float] = None
     is_on_sale: Optional[bool] = None
+
+def normalize_rating(rating: float) -> float:
+    if rating is None:
+        return 5.0
+    return min(5.0, max(1.0, round(float(rating), 1)))
 
 @router.get("/")
 async def list_products(page: int = 1, page_size: int = 10, keyword: str = None, category_id: str = None):
@@ -92,11 +99,12 @@ async def create_product(req: ProductCreate):
     import json
     product_id = str(uuid.uuid4())
     images_json = json.dumps(req.images) if req.images else "[]"
+    rating = normalize_rating(req.rating)
     with get_db_cursor() as cur:
-        cur.execute("""INSERT INTO products (id, category_id, name, subtitle, description, price, original_price, images, stock, is_on_sale)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)""",
+        cur.execute("""INSERT INTO products (id, category_id, name, subtitle, description, price, original_price, images, stock, rating, is_on_sale)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)""",
                     (product_id, req.category_id, req.name, req.subtitle, req.description,
-                     req.price, req.original_price, images_json, req.stock, req.is_on_sale))
+                     req.price, req.original_price, images_json, req.stock, rating, req.is_on_sale))
     return {"id": product_id, "message": "创建成功"}
 
 @router.put("/{product_id}")
@@ -117,6 +125,7 @@ async def update_product(product_id: str, req: ProductUpdate):
         if req.original_price is not None: updates.append("original_price=%s"); vals.append(req.original_price)
         if req.images is not None: updates.append("images=%s::jsonb"); vals.append(json.dumps(req.images))
         if req.stock is not None: updates.append("stock=%s"); vals.append(req.stock)
+        if req.rating is not None: updates.append("rating=%s"); vals.append(normalize_rating(req.rating))
         if req.is_on_sale is not None: updates.append("is_on_sale=%s"); vals.append(req.is_on_sale)
         if updates:
             vals.append(product_id)
