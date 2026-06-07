@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     wechat_pay_api_v3_key: str = ""
     wechat_pay_private_key_path: str = ""
     wechat_pay_notify_url: str = ""
+    wechat_pay_public_key_id: str = ""
+    wechat_pay_public_key_path: str = ""
     cors_origins: str = '["*"]'
     upload_dir: str = "./uploads"
     max_file_size: int = 10485760

@@ -16,6 +16,7 @@ from app.config import settings
 WECHAT_PAY_HOST = "https://api.mch.weixin.qq.com"
 _platform_cert_cache: Dict[str, object] = {}
 _platform_cert_loaded_at = 0.0
+_wechat_public_key = None
 
 
 class WechatPayError(Exception):
@@ -45,6 +46,20 @@ def _load_private_key():
             return serialization.load_pem_private_key(f.read(), password=None)
     except Exception as exc:
         raise WechatPayError("Failed to load WeChat Pay private key") from exc
+
+
+def _load_wechat_public_key():
+    global _wechat_public_key
+    if _wechat_public_key is not None:
+        return _wechat_public_key
+    if not settings.wechat_pay_public_key_id or not settings.wechat_pay_public_key_path:
+        return None
+    try:
+        with open(settings.wechat_pay_public_key_path, "rb") as f:
+            _wechat_public_key = serialization.load_pem_public_key(f.read())
+        return _wechat_public_key
+    except Exception as exc:
+        raise WechatPayError("Failed to load WeChat Pay public key") from exc
 
 
 def _rsa_sign(message: str) -> str:
@@ -177,13 +192,17 @@ async def verify_notify_signature(headers: dict, body: bytes) -> None:
     if not all([timestamp, nonce, signature, serial]):
         raise WechatPayError("Missing WeChat Pay notify headers")
 
-    await _load_platform_certs()
-    public_key = _platform_cert_cache.get(serial)
+    public_key = None
+    if settings.wechat_pay_public_key_id and serial == settings.wechat_pay_public_key_id:
+        public_key = _load_wechat_public_key()
     if public_key is None:
-        await _load_platform_certs(force=True)
+        await _load_platform_certs()
         public_key = _platform_cert_cache.get(serial)
+        if public_key is None:
+            await _load_platform_certs(force=True)
+            public_key = _platform_cert_cache.get(serial)
     if public_key is None:
-        raise WechatPayError("Unknown WeChat platform certificate serial")
+        raise WechatPayError("Unknown WeChat Pay signature serial")
 
     message = f"{timestamp}\n{nonce}\n{body.decode('utf-8')}\n".encode("utf-8")
     try:
