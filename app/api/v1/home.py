@@ -1,4 +1,5 @@
 """首页模块API（小程序端 + 管理端）"""
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional, List
@@ -11,6 +12,10 @@ from app.utils.response import success_response
 from app.database import get_db_cursor
 
 router = APIRouter()
+
+def money(value):
+    amount = Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{amount:.2f}"
 
 ASSET_UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/uploads"
 ASSET_UPLOAD_PREFIX = "/assets/uploads"
@@ -69,7 +74,7 @@ async def get_home_new(limit: int = 10):
         images = p["images"] or []
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
-            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "price": money(p["price"]), "original_price": money(p["original_price"]),
             "main_image": images[0] if images else "",
             "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
         })
@@ -85,7 +90,7 @@ async def get_home_recommend(limit: int = 10):
         images = p["images"] or []
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
-            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "price": money(p["price"]), "original_price": money(p["original_price"]),
             "main_image": images[0] if images else "",
             "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
         })

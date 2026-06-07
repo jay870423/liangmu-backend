@@ -1,9 +1,14 @@
 """商品模块API"""
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Query
 from app.utils.response import success_response, error_response, page_response
 from app.database import get_db_cursor
 
 router = APIRouter()
+
+def money(value):
+    amount = Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{amount:.2f}"
 
 def build_search_filter(keyword: str):
     terms = [term.strip() for term in keyword.split() if term.strip()]
@@ -51,7 +56,7 @@ async def search_products(keyword: str = "", page: int = 1, page_size: int = 20)
         images = p["images"] or []
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
-            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "price": money(p["price"]), "original_price": money(p["original_price"]),
             "main_image": images[0] if images else "", "sales": p["sales_count"] or 0,
             "rating": float(p["rating"]) if p["rating"] else 5.0
         })
@@ -70,8 +75,8 @@ async def get_product_detail(product_id: str):
     images = product["images"] or []
     return success_response(data={
         "id": str(product["id"]), "name": product["name"], "subtitle": product["subtitle"] or "",
-        "description": product["description"] or "", "price": int(product["price"]),
-        "original_price": int(product["original_price"]) if product["original_price"] else 0,
+        "description": product["description"] or "", "price": money(product["price"]),
+        "original_price": money(product["original_price"]),
         "stock": product["stock"] or 0, "main_image": images[0] if images else "",
         "images": images, "detail_images": product["detail_images"] or [],
         "specs": product["specs"] or [], "tags": product["tags"] or [],
@@ -105,7 +110,7 @@ async def list_products(category_id: str = "", page: int = 1, page_size: int = 2
         images = p["images"] or []
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
-            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "price": money(p["price"]), "original_price": money(p["original_price"]),
             "main_image": images[0] if images else "", "sales": p["sales_count"] or 0,
             "rating": float(p["rating"]) if p["rating"] else 5.0
         })
