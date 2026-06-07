@@ -240,7 +240,14 @@ async def get_orders(user: dict = Depends(get_current_user), status: str = "all"
     with get_db_cursor() as cursor:
         if normalized_status == "all":
             cursor.execute(
-                "SELECT id, order_no, status, total_amount, pay_amount, created_at FROM orders WHERE user_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                """
+                SELECT id, order_no, status, total_amount, freight_amount, coupon_amount,
+                       points_amount, pay_amount, created_at
+                FROM orders
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
                 (user_id, page_size, offset),
             )
             orders = cursor.fetchall()
@@ -248,7 +255,14 @@ async def get_orders(user: dict = Depends(get_current_user), status: str = "all"
         else:
             db_status = status_map.get(normalized_status, "pending")
             cursor.execute(
-                "SELECT id, order_no, status, total_amount, pay_amount, created_at FROM orders WHERE user_id = %s AND status = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                """
+                SELECT id, order_no, status, total_amount, freight_amount, coupon_amount,
+                       points_amount, pay_amount, created_at
+                FROM orders
+                WHERE user_id = %s AND status = %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
                 (user_id, db_status, page_size, offset),
             )
             orders = cursor.fetchall()
@@ -283,6 +297,9 @@ async def get_orders(user: dict = Depends(get_current_user), status: str = "all"
             "order_no": order["order_no"],
             "status": order["status"],
             "total_amount": str(order["total_amount"]),
+            "freight_amount": str(order["freight_amount"]),
+            "coupon_amount": str(order["coupon_amount"]),
+            "points_amount": str(order["points_amount"]),
             "pay_amount": str(order["pay_amount"]),
             "total_count": sum(item["quantity"] for item in order_items),
             "items": order_items,
