@@ -9,6 +9,7 @@ import random
 import hashlib
 import time
 import json
+from psycopg2.extras import RealDictCursor
 
 router = APIRouter()
 
@@ -21,6 +22,12 @@ def generate_pay_sign(prepay_id, nonce_str, timestamp):
     data = f"appId={s.WX_APPID}&nonceStr={nonce_str}&package=prepay_id={prepay_id}&signType=MD5&timeStamp={timestamp}&key={s.SECRET_KEY}"
     return hashlib.md5(data.encode()).hexdigest().upper()
 
+class OrderCreateError(Exception):
+    def __init__(self, code: int, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
 @router.post("/orders")
 async def create_order(req: Request, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
@@ -29,9 +36,30 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
     delivery_type = body.get("delivery_type", "express")
     coupon_id = body.get("coupon_id")
     use_points = body.get("use_points", 0)
+    try:
+        use_points = int(use_points or 0)
+    except (TypeError, ValueError):
+        return error_response(1000, "积分数量不正确")
+    if use_points < 0:
+        return error_response(1000, "积分数量不正确")
     items_data = body.get("items", [])
     if not items_data:
         return error_response(1001, "缺少商品信息")
+    normalized_items = []
+    product_quantities = {}
+    for item_data in items_data:
+        product_id = str(item_data.get("product_id") or "").strip()
+        try:
+            quantity = int(item_data.get("quantity", 1))
+        except (TypeError, ValueError):
+            return error_response(1001, "商品数量不正确")
+        if not product_id:
+            return error_response(1001, "缺少商品ID")
+        if quantity <= 0:
+            return error_response(1001, "商品数量必须大于0")
+        sku_spec = item_data.get("sku_spec", {})
+        normalized_items.append({"product_id": product_id, "quantity": quantity, "sku_spec": sku_spec})
+        product_quantities[product_id] = product_quantities.get(product_id, 0) + quantity
     receiver_name = ""
     receiver_phone = ""
     shipping_address = ""
@@ -47,62 +75,97 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
         receiver_name = addr["receiver_name"] or ""
         receiver_phone = addr["phone"] or ""
         shipping_address = f"{addr['province']}{addr['city']}{addr['district']}{addr['detail_address']}"
-    order_items = []
-    total_amount = 0.0
-    with get_db_cursor() as cursor:
-        for item_data in items_data:
-            product_id = item_data.get("product_id")
-            quantity = item_data.get("quantity", 1)
-            sku_spec = item_data.get("sku_spec", {})
-            cursor.execute("SELECT id, name, price, stock, images FROM products WHERE id = %s AND is_on_sale = true", (product_id,))
-            product = cursor.fetchone()
-            if not product:
-                return error_response(2001, f"商品不存在: {product_id}")
-            if product["stock"] < quantity:
-                return error_response(2002, f"库存不足: {product['name']}")
-            images = product["images"] or []
-            subtotal = float(product["price"]) * quantity
-            total_amount += subtotal
-            order_items.append({"product_id": str(product["id"]), "product_name": product["name"], "product_image": images[0] if images else "", "sku_spec": sku_spec, "price": product["price"], "quantity": quantity, "subtotal": subtotal})
-    freight_amount = 0.0 if total_amount >= 500 else 10.0
-    coupon_amount = 0.0
-    if coupon_id:
-        with get_db_cursor() as cursor:
-            cursor.execute("SELECT c.id, c.discount_amount, c.min_order_amount FROM coupons c JOIN user_coupons uc ON c.id = uc.coupon_id WHERE c.id = %s AND uc.user_id = %s AND uc.status = 'unused' AND c.end_time > %s", (coupon_id, user_id, datetime.now()))
-            coupon = cursor.fetchone()
-        if not coupon:
-            return error_response(2004, "优惠券不可用")
-        if total_amount < float(coupon["min_order_amount"]):
-            return error_response(2004, f"订单金额未达门槛: {coupon['min_order_amount']}元")
-        coupon_amount = float(coupon["discount_amount"])
-    points_amount = 0.0
-    points_used = 0
-    if use_points > 0:
-        with get_db_cursor() as cursor:
-            cursor.execute("SELECT available_points FROM users WHERE id = %s", (user_id,))
-            user_data = cursor.fetchone()
-        available_points = user_data["available_points"] if user_data else 0
-        if use_points > available_points:
-            return error_response(1000, "积分不足")
-        points_used = use_points
-        points_amount = points_used / 100.0
-    pay_amount = total_amount + freight_amount - coupon_amount - points_amount
-    if pay_amount < 0:
-        pay_amount = 0
     order_no = generate_order_no()
     order_id = str(uuid.uuid4())
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""INSERT INTO orders (id, order_no, user_id, address_id, receiver_name, receiver_phone, shipping_address, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, points_earned, points_used, delivery_type, status, buyer_note, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (order_id, order_no, user_id, address_id, receiver_name, receiver_phone, shipping_address, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, int(total_amount), points_used, delivery_type, "pending", body.get("buyer_note", ""), datetime.now()))
-        for item in order_items:
-            cursor.execute("""INSERT INTO order_items (id, order_id, product_id, product_name, product_image, sku_spec, price, quantity, subtotal) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)""", (str(uuid.uuid4()), order_id, item["product_id"], item["product_name"], item["product_image"], json.dumps(item["sku_spec"]), item["price"], item["quantity"], item["subtotal"]))
-            cursor.execute("UPDATE products SET stock = stock - %s, sales_count = sales_count + %s WHERE id = %s", (item["quantity"], item["quantity"], item["product_id"]))
-        if coupon_id:
-            cursor.execute("UPDATE user_coupons SET status = 'used' WHERE user_id = %s AND coupon_id = %s", (user_id, coupon_id))
-        if points_used > 0:
-            cursor.execute("UPDATE users SET available_points = available_points - %s WHERE id = %s", (points_used, user_id))
-            cursor.execute("""INSERT INTO points_log (id, user_id, order_id, type, points, balance, note, created_at) VALUES (%s, %s, %s, 'redeem', %s, available_points - %s, %s, %s)""", (str(uuid.uuid4()), user_id, order_id, points_used, points_used, f"订单{order_no}使用积分抵扣", datetime.now()))
-        conn.commit()
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            products = {}
+            for product_id in sorted(product_quantities.keys()):
+                cursor.execute(
+                    "SELECT id, name, price, stock, images FROM products WHERE id = %s AND is_on_sale = true FOR UPDATE",
+                    (product_id,)
+                )
+                product = cursor.fetchone()
+                if not product:
+                    raise OrderCreateError(2001, f"商品不存在: {product_id}")
+                required_quantity = product_quantities[product_id]
+                if product["stock"] < required_quantity:
+                    raise OrderCreateError(2002, f"库存不足: {product['name']}")
+                products[product_id] = product
+
+            order_items = []
+            total_amount = 0.0
+            for item_data in normalized_items:
+                product = products[item_data["product_id"]]
+                images = product["images"] or []
+                quantity = item_data["quantity"]
+                subtotal = float(product["price"]) * quantity
+                total_amount += subtotal
+                order_items.append({
+                    "product_id": str(product["id"]),
+                    "product_name": product["name"],
+                    "product_image": images[0] if images else "",
+                    "sku_spec": item_data["sku_spec"],
+                    "price": product["price"],
+                    "quantity": quantity,
+                    "subtotal": subtotal
+                })
+
+            freight_amount = 0.0 if total_amount >= 500 else 10.0
+            coupon_amount = 0.0
+            if coupon_id:
+                cursor.execute("""
+                    SELECT uc.id AS user_coupon_id, c.discount_amount, c.min_order_amount
+                    FROM user_coupons uc
+                    JOIN coupons c ON c.id = uc.coupon_id
+                    WHERE c.id = %s AND uc.user_id = %s AND uc.status = 'unused' AND c.end_time > %s
+                    FOR UPDATE OF uc
+                """, (coupon_id, user_id, datetime.now()))
+                coupon = cursor.fetchone()
+                if not coupon:
+                    raise OrderCreateError(2004, "优惠券不可用")
+                if total_amount < float(coupon["min_order_amount"]):
+                    raise OrderCreateError(2004, f"订单金额未达门槛: {coupon['min_order_amount']}元")
+                coupon_amount = float(coupon["discount_amount"])
+
+            points_amount = 0.0
+            points_used = 0
+            available_points = 0
+            if use_points > 0:
+                cursor.execute("SELECT available_points FROM users WHERE id = %s FOR UPDATE", (user_id,))
+                user_data = cursor.fetchone()
+                available_points = user_data["available_points"] if user_data else 0
+                if use_points > available_points:
+                    raise OrderCreateError(1000, "积分不足")
+                points_used = use_points
+                points_amount = points_used / 100.0
+
+            pay_amount = total_amount + freight_amount - coupon_amount - points_amount
+            if pay_amount < 0:
+                pay_amount = 0
+
+            cursor.execute("""INSERT INTO orders (id, order_no, user_id, address_id, receiver_name, receiver_phone, shipping_address, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, points_earned, points_used, delivery_type, status, buyer_note, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (order_id, order_no, user_id, address_id, receiver_name, receiver_phone, shipping_address, total_amount, freight_amount, coupon_amount, points_amount, pay_amount, int(total_amount), points_used, delivery_type, "pending", body.get("buyer_note", ""), datetime.now()))
+            for item in order_items:
+                cursor.execute("""INSERT INTO order_items (id, order_id, product_id, product_name, product_image, sku_spec, price, quantity, subtotal) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)""", (str(uuid.uuid4()), order_id, item["product_id"], item["product_name"], item["product_image"], json.dumps(item["sku_spec"]), item["price"], item["quantity"], item["subtotal"]))
+            for product_id, quantity in product_quantities.items():
+                cursor.execute("""
+                    UPDATE products
+                    SET stock = stock - %s, sales_count = sales_count + %s, updated_at = NOW()
+                    WHERE id = %s AND stock >= %s
+                """, (quantity, quantity, product_id, quantity))
+                if cursor.rowcount != 1:
+                    raise OrderCreateError(2002, "库存不足，请重新下单")
+            if coupon_id:
+                cursor.execute("UPDATE user_coupons SET status = 'used', order_id = %s, used_at = %s WHERE user_id = %s AND coupon_id = %s AND status = 'unused'", (order_id, datetime.now(), user_id, coupon_id))
+                if cursor.rowcount != 1:
+                    raise OrderCreateError(2004, "优惠券不可用")
+            if points_used > 0:
+                cursor.execute("UPDATE users SET available_points = available_points - %s WHERE id = %s", (points_used, user_id))
+                cursor.execute("""INSERT INTO points_log (id, user_id, order_id, type, points, balance, note, created_at) VALUES (%s, %s, %s, 'redeem', %s, %s, %s, %s)""", (str(uuid.uuid4()), user_id, order_id, points_used, available_points - points_used, f"订单{order_no}使用积分抵扣", datetime.now()))
+            conn.commit()
+    except OrderCreateError as e:
+        return error_response(e.code, e.message)
     return success_response(data={"order_id": order_id, "order_no": order_no, "total_amount": f"{total_amount:.2f}", "freight_amount": f"{freight_amount:.2f}", "coupon_amount": f"{coupon_amount:.2f}", "points_amount": f"{points_amount:.2f}", "pay_amount": f"{pay_amount:.2f}"})
 
 @router.get("/orders")

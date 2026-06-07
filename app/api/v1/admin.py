@@ -58,16 +58,26 @@ async def get_stats():
             today_users = cur.fetchone()["count"]
             cur.execute("SELECT COUNT(*) FROM products")
             total_products = cur.fetchone()["count"]
-            cur.execute("SELECT COUNT(*) FROM orders WHERE status IN ('pending', 'paid')")
-            pending_orders = cur.fetchone()["count"]
+            cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'pending'")
+            pending_payment_orders = cur.fetchone()["count"]
+            cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'paid'")
+            paid_orders = cur.fetchone()["count"]
             cur.execute("SELECT id, name, stock FROM products WHERE stock < 10 ORDER BY stock ASC LIMIT 5")
-            low_stock = [{"id": r["id"], "name": r["name"], "stock": r["stock"]} for r in cur.fetchall()]
+            low_stock = [{"id": str(r["id"]), "name": r["name"], "stock": r["stock"]} for r in cur.fetchall()]
             return {
                 "today_orders": today_orders, "today_sales": today_sales, "today_users": today_users,
-                "total_products": total_products, "pending_orders": pending_orders, "low_stock_products": low_stock
+                "total_products": total_products,
+                "pending_orders": paid_orders,
+                "paid_orders": paid_orders,
+                "pending_payment_orders": pending_payment_orders,
+                "low_stock_products": low_stock
             }
     except Exception:
-        return {"today_orders": 0, "today_sales": 0, "today_users": 0, "total_products": 0, "pending_orders": 0, "low_stock_products": []}
+        return {
+            "today_orders": 0, "today_sales": 0, "today_users": 0,
+            "total_products": 0, "pending_orders": 0, "paid_orders": 0,
+            "pending_payment_orders": 0, "low_stock_products": []
+        }
 
 # ===== 订单管理 =====
 @router.get("/orders")
@@ -164,9 +174,22 @@ async def update_order_status(order_id: str, status: str):
         raise HTTPException(status_code=400, detail="无效状态")
     try:
         with get_db_cursor() as cur:
-            cur.execute("UPDATE orders SET status = %s, updated_at = NOW() WHERE id = %s", (allowed[status], order_id))
-            if cur.rowcount == 0:
+            cur.execute("SELECT id, status FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+            order = cur.fetchone()
+            if not order:
                 raise HTTPException(status_code=404, detail="订单不存在")
+            old_status = order["status"]
+            new_status = allowed[status]
+            cur.execute("UPDATE orders SET status = %s, updated_at = NOW() WHERE id = %s", (new_status, order_id))
+            if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
+                cur.execute("""
+                    UPDATE products p
+                    SET stock = stock + oi.quantity,
+                        sales_count = GREATEST(0, sales_count - oi.quantity),
+                        updated_at = NOW()
+                    FROM order_items oi
+                    WHERE oi.order_id = %s AND p.id = oi.product_id
+                """, (order_id,))
         return {"success": True, "message": "更新成功"}
     except HTTPException:
         raise
