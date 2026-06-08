@@ -7,6 +7,7 @@ from app.database import get_db_cursor
 
 ASSET_UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/uploads"
 ASSET_UPLOAD_PREFIX = "/assets/uploads"
+PUBLIC_ASSET_BASE_URL = os.getenv("PUBLIC_ASSET_BASE_URL", "https://api.zhouyuaninfo.com.cn")
 os.makedirs(ASSET_UPLOAD_DIR, exist_ok=True)
 
 def _ext_from_content_type(content_type: str, default: str = ".jpg") -> str:
@@ -30,6 +31,14 @@ def _save_generated_image(image_url: str, prefix: str) -> str:
     with open(filepath, "wb") as f:
         f.write(resp.content)
     return f"{ASSET_UPLOAD_PREFIX}/{filename}"
+
+def _public_image_url(image_url: str) -> str:
+    image_url = (image_url or "").strip()
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return image_url
+    if image_url.startswith("/"):
+        return f"{PUBLIC_ASSET_BASE_URL.rstrip('/')}{image_url}"
+    return ""
 
 def _extract_image_url(result: dict) -> str:
     data = result.get("data") if isinstance(result, dict) else {}
@@ -58,17 +67,27 @@ def _extract_ai_error(result: dict) -> str:
             return str(msg)
     return "AI 服务未返回图片"
 
-def _generate_minimax_image(prompt: str, prefix: str):
+def _generate_minimax_image(prompt: str, prefix: str, subject_image_url: str = ""):
     api_key = os.getenv("MINIMAX_API_KEY", "")
     if not api_key:
         return {"image_url": "", "error": "API Key未配置"}
     last_error = ""
+    payload = {
+        "model": "image-01",
+        "prompt": prompt,
+        "aspect_ratio": "1:1",
+        "n": 1,
+        "prompt_optimizer": True,
+        "response_format": "url",
+    }
+    if subject_image_url:
+        payload["subject_reference"] = [{"type": "character", "image_file": subject_image_url}]
     for _ in range(2):
         try:
             resp = httpx.post(
                 "https://api.minimaxi.com/v1/image_generation",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "image-01", "prompt": prompt, "response_format": "url"},
+                json=payload,
                 timeout=httpx.Timeout(90.0, read=150.0),
             )
             if resp.status_code >= 400:
@@ -88,13 +107,21 @@ def _generate_minimax_image(prompt: str, prefix: str):
 def _optimize_product_image(product_name: str, category: str = "", image_url: str = ""):
     if not product_name.strip():
         return {"image_url": "", "error": "请先填写商品名称"}
-    source_hint = f"参考已有商品图：{image_url}。" if image_url else ""
+    subject_image_url = _public_image_url(image_url)
+    if image_url and not subject_image_url:
+        return {"image_url": "", "error": "原图地址无效，请使用已上传图片或完整图片链接"}
     prompt = (
-        f"{source_hint}请为电商商品'{product_name}'生成一张优化后的主图，类目：{category}。"
-        "要求：真实商品摄影风格，突出木质纹理和手工质感，干净浅色背景，柔和自然光，"
-        "构图居中，细节清晰，适合小程序商城商品主图，无文字、无水印、无边框。"
+        f"基于参考图中的同一件商品进行图片优化。商品名称：{product_name}，类目：{category}。"
+        "必须保持参考图商品主体一致，包括形状、颜色、材质纹理、珠子排列、比例和主要细节，"
+        "不要生成另一件商品。可以优化或替换背景、光线、阴影、清晰度和构图；"
+        "使用真实商品摄影风格，干净浅色或木质桌面背景，柔和自然光，主体居中，"
+        "适合小程序商城商品主图，无文字、无水印、无边框。"
     )
-    return _generate_minimax_image(prompt, "product_ai")
+    result = _generate_minimax_image(prompt, "product_ai", subject_image_url)
+    if result.get("image_url"):
+        result["mode"] = "image_to_image" if subject_image_url else "text_to_image"
+        result["source_image_url"] = subject_image_url
+    return result
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
