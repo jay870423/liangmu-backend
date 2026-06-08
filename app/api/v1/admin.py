@@ -388,6 +388,15 @@ async def generate_product_desc_stream(product_name: str, category: str):
     prompt = f"Please answer in Chinese. Write a 50-100 Chinese character premium product description for product '{product_name}' in category '{category}'. Highlight material, craft, and collection value."
     return _stream_response([{"role": "user", "content": prompt}])
 
+@router.get("/ai/polish_desc/stream")
+async def polish_product_desc_stream(product_name: str, category: str = "", description: str = ""):
+    prompt = (
+        "请用中文润色以下商品描述，保留真实信息，不夸大功效，不添加无法确认的产地、年份、证书或材质。"
+        "输出 80-140 字，语气高端、自然、有销售力，适合小程序商品详情页。\n"
+        f"商品名称：{product_name}\n分类：{category}\n原描述：{description}"
+    )
+    return _stream_response([{"role": "user", "content": prompt}])
+
 class AICallReq(BaseModel):
     message: str
     context: str = None
@@ -463,6 +472,35 @@ async def generate_product_image(product_name: str, category: str = ""):
         if not image_url:
             return {"image_url": "", "error": "生成失败，请重试"}
         local_url = _save_generated_image(image_url, "product")
+        return {"image_url": local_url}
+    except Exception as e:
+        return {"image_url": "", "error": str(e)}
+
+@router.get("/ai/optimize_image")
+async def optimize_product_image(product_name: str, category: str = "", image_url: str = ""):
+    """Generate a polished ecommerce product image inspired by an existing uploaded image."""
+    import os
+    api_key = os.getenv("MINIMAX_API_KEY", "")
+    if not api_key:
+        return {"image_url": "", "error": "API Key未配置"}
+    try:
+        source_hint = f"参考已有商品图：{image_url}。" if image_url else ""
+        prompt = (
+            f"{source_hint}请为电商商品'{product_name}'生成一张优化后的主图，类目：{category}。"
+            "要求：真实商品摄影风格，突出木质纹理和手工质感，干净浅色背景，柔和自然光，"
+            "构图居中，细节清晰，适合小程序商城商品主图，无文字、无水印、无边框。"
+        )
+        resp = httpx.post(
+            "https://api.minimaxi.com/v1/image_generation",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": "image-01", "prompt": prompt, "response_format": "url"},
+            timeout=60.0,
+        )
+        result = resp.json()
+        new_image_url = result.get("data", {}).get("image_urls", [""])[0]
+        if not new_image_url:
+            return {"image_url": "", "error": "优化失败，请重试"}
+        local_url = _save_generated_image(new_image_url, "product_ai")
         return {"image_url": local_url}
     except Exception as e:
         return {"image_url": "", "error": str(e)}
