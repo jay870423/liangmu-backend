@@ -31,6 +31,71 @@ def _save_generated_image(image_url: str, prefix: str) -> str:
         f.write(resp.content)
     return f"{ASSET_UPLOAD_PREFIX}/{filename}"
 
+def _extract_image_url(result: dict) -> str:
+    data = result.get("data") if isinstance(result, dict) else {}
+    urls = data.get("image_urls") if isinstance(data, dict) else None
+    if isinstance(urls, list) and urls:
+        return urls[0] or ""
+    images = data.get("images") if isinstance(data, dict) else None
+    if isinstance(images, list) and images:
+        first = images[0] or {}
+        if isinstance(first, dict):
+            return first.get("url") or first.get("image_url") or ""
+    return ""
+
+def _extract_ai_error(result: dict) -> str:
+    if not isinstance(result, dict):
+        return "AI 服务返回异常"
+    base_resp = result.get("base_resp") or {}
+    if isinstance(base_resp, dict):
+        msg = base_resp.get("status_msg") or base_resp.get("message")
+        if msg:
+            return str(msg)
+    err = result.get("error") or {}
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("msg")
+        if msg:
+            return str(msg)
+    return "AI 服务未返回图片"
+
+def _generate_minimax_image(prompt: str, prefix: str):
+    api_key = os.getenv("MINIMAX_API_KEY", "")
+    if not api_key:
+        return {"image_url": "", "error": "API Key未配置"}
+    last_error = ""
+    for _ in range(2):
+        try:
+            resp = httpx.post(
+                "https://api.minimaxi.com/v1/image_generation",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "image-01", "prompt": prompt, "response_format": "url"},
+                timeout=httpx.Timeout(90.0, read=150.0),
+            )
+            if resp.status_code >= 400:
+                last_error = f"AI 服务异常：{resp.status_code} {resp.text[:200]}"
+                continue
+            result = resp.json()
+            image_url = _extract_image_url(result)
+            if image_url:
+                return {"image_url": _save_generated_image(image_url, prefix)}
+            last_error = _extract_ai_error(result)
+        except httpx.TimeoutException:
+            last_error = "AI 图片生成超时，请稍后重试"
+        except Exception as e:
+            last_error = str(e)
+    return {"image_url": "", "error": last_error or "AI 图片生成失败"}
+
+def _optimize_product_image(product_name: str, category: str = "", image_url: str = ""):
+    if not product_name.strip():
+        return {"image_url": "", "error": "请先填写商品名称"}
+    source_hint = f"参考已有商品图：{image_url}。" if image_url else ""
+    prompt = (
+        f"{source_hint}请为电商商品'{product_name}'生成一张优化后的主图，类目：{category}。"
+        "要求：真实商品摄影风格，突出木质纹理和手工质感，干净浅色背景，柔和自然光，"
+        "构图居中，细节清晰，适合小程序商城商品主图，无文字、无水印、无边框。"
+    )
+    return _generate_minimax_image(prompt, "product_ai")
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -401,6 +466,11 @@ class AICallReq(BaseModel):
     message: str
     context: str = None
 
+class AIImageOptimizeReq(BaseModel):
+    product_name: str
+    category: str = ""
+    image_url: str = ""
+
 @router.post("/ai/chat")
 async def ai_chat(req: AICallReq):
     system_prompt = "你是小吉微商城的AI运营助手，职责：分析销售数据、回答商品订单用户问题、提供营销建议、生成文案活动方案。请用专业但易懂的语言回答。"
@@ -447,63 +517,22 @@ async def ai_predict_stream(type: str, data: dict):
 @router.get("/ai/generate_image")
 async def generate_product_image(product_name: str, category: str = ""):
     """用 MiniMax 图片生成模型为商品生成图片"""
-    import os
-    api_key = os.getenv("MINIMAX_API_KEY", "")
-    if not api_key:
-        return {"image_url": "", "error": "API Key未配置"}
-    try:
-        prompt = (
-            f"专业商品摄影风格，{category}类目：{product_name}，"
-            f"高端木质工艺品展示，纯色背景，光线柔和，8K超清，无文字无水印，"
-            f"适合电商主图"
-        )
-        resp = httpx.post(
-            "https://api.minimaxi.com/v1/image_generation",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "image-01",
-                "prompt": prompt,
-                "response_format": "url"
-            },
-            timeout=60.0
-        )
-        result = resp.json()
-        image_url = result.get("data", {}).get("image_urls", [""])[0]
-        if not image_url:
-            return {"image_url": "", "error": "生成失败，请重试"}
-        local_url = _save_generated_image(image_url, "product")
-        return {"image_url": local_url}
-    except Exception as e:
-        return {"image_url": "", "error": str(e)}
+    prompt = (
+        f"专业商品摄影风格，{category}类目：{product_name}，"
+        f"高端木质工艺品展示，纯色背景，光线柔和，8K超清，无文字无水印，"
+        f"适合电商主图"
+    )
+    return _generate_minimax_image(prompt, "product")
 
 @router.get("/ai/optimize_image")
 async def optimize_product_image(product_name: str, category: str = "", image_url: str = ""):
     """Generate a polished ecommerce product image inspired by an existing uploaded image."""
-    import os
-    api_key = os.getenv("MINIMAX_API_KEY", "")
-    if not api_key:
-        return {"image_url": "", "error": "API Key未配置"}
-    try:
-        source_hint = f"参考已有商品图：{image_url}。" if image_url else ""
-        prompt = (
-            f"{source_hint}请为电商商品'{product_name}'生成一张优化后的主图，类目：{category}。"
-            "要求：真实商品摄影风格，突出木质纹理和手工质感，干净浅色背景，柔和自然光，"
-            "构图居中，细节清晰，适合小程序商城商品主图，无文字、无水印、无边框。"
-        )
-        resp = httpx.post(
-            "https://api.minimaxi.com/v1/image_generation",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": "image-01", "prompt": prompt, "response_format": "url"},
-            timeout=60.0,
-        )
-        result = resp.json()
-        new_image_url = result.get("data", {}).get("image_urls", [""])[0]
-        if not new_image_url:
-            return {"image_url": "", "error": "优化失败，请重试"}
-        local_url = _save_generated_image(new_image_url, "product_ai")
-        return {"image_url": local_url}
-    except Exception as e:
-        return {"image_url": "", "error": str(e)}
+    return _optimize_product_image(product_name, category, image_url)
+
+@router.post("/ai/optimize_image")
+async def optimize_product_image_post(req: AIImageOptimizeReq):
+    """Generate a polished ecommerce product image from JSON payload."""
+    return _optimize_product_image(req.product_name, req.category, req.image_url)
 
 @router.post("/upload/image")
 async def upload_product_image(file: UploadFile = File(...)):
