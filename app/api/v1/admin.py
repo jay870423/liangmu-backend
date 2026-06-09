@@ -10,6 +10,21 @@ ASSET_UPLOAD_PREFIX = "/assets/uploads"
 PUBLIC_ASSET_BASE_URL = os.getenv("PUBLIC_ASSET_BASE_URL", "https://api.zhouyuaninfo.com.cn")
 os.makedirs(ASSET_UPLOAD_DIR, exist_ok=True)
 
+def _get_minimax_api_key() -> str:
+    key = os.getenv("MINIMAX_API_KEY", "").strip()
+    if key:
+        return key
+    env_path = "/home/ubuntu/liangmu-backend/.env"
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("MINIMAX_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("'\"")
+    except FileNotFoundError:
+        pass
+    return ""
+
 def _ext_from_content_type(content_type: str, default: str = ".jpg") -> str:
     content_type = (content_type or "").lower()
     if "png" in content_type:
@@ -68,7 +83,7 @@ def _extract_ai_error(result: dict) -> str:
     return "AI 服务未返回图片"
 
 def _generate_minimax_image(prompt: str, prefix: str, subject_image_url: str = "", aspect_ratio: str = "1:1"):
-    api_key = os.getenv("MINIMAX_API_KEY", "")
+    api_key = _get_minimax_api_key()
     if not api_key:
         return {"image_url": "", "error": "API Key未配置"}
     last_error = ""
@@ -380,7 +395,7 @@ async def adjust_user_points(user_id: str, points_delta: int = Query(..., descri
 # ===== AI 能力 =====
 def _call_minimax(prompt: str, timeout: float = 30.0) -> str:
     import os
-    api_key = os.getenv("MINIMAX_API_KEY", "")
+    api_key = _get_minimax_api_key()
     if not api_key:
         return "AI功能暂未配置API Key"
     try:
@@ -417,7 +432,7 @@ def _extract_stream_piece(payload):
     return "", False
 
 async def _stream_minimax_messages(messages):
-    api_key = os.getenv("MINIMAX_API_KEY", "")
+    api_key = _get_minimax_api_key()
     if not api_key:
         yield "AI API Key is not configured."
         return
@@ -531,7 +546,7 @@ async def ai_chat(req: AICallReq):
     messages.append({"role": "user", "content": req.message})
     try:
         import os
-        api_key = os.getenv("MINIMAX_API_KEY", "")
+        api_key = _get_minimax_api_key()
         if not api_key:
             return {"message": "AI助手暂未配置API Key，请联系管理员。"}
         resp = httpx.post(
