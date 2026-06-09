@@ -1,4 +1,5 @@
 from fastapi import Query, APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from datetime import date, datetime
 import json, secrets, httpx, os, uuid, aiofiles
@@ -6,6 +7,7 @@ from app.database import get_db_cursor
 
 ASSET_UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/uploads"
 ASSET_UPLOAD_PREFIX = "/assets/uploads"
+PUBLIC_ASSET_BASE_URL = os.getenv("PUBLIC_ASSET_BASE_URL", "https://api.zhouyuaninfo.com.cn")
 os.makedirs(ASSET_UPLOAD_DIR, exist_ok=True)
 
 def _ext_from_content_type(content_type: str, default: str = ".jpg") -> str:
@@ -30,6 +32,118 @@ def _save_generated_image(image_url: str, prefix: str) -> str:
         f.write(resp.content)
     return f"{ASSET_UPLOAD_PREFIX}/{filename}"
 
+def _public_image_url(image_url: str) -> str:
+    image_url = (image_url or "").strip()
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return image_url
+    if image_url.startswith("/"):
+        return f"{PUBLIC_ASSET_BASE_URL.rstrip('/')}{image_url}"
+    return ""
+
+def _extract_image_url(result: dict) -> str:
+    data = result.get("data") if isinstance(result, dict) else {}
+    urls = data.get("image_urls") if isinstance(data, dict) else None
+    if isinstance(urls, list) and urls:
+        return urls[0] or ""
+    images = data.get("images") if isinstance(data, dict) else None
+    if isinstance(images, list) and images:
+        first = images[0] or {}
+        if isinstance(first, dict):
+            return first.get("url") or first.get("image_url") or ""
+    return ""
+
+def _extract_ai_error(result: dict) -> str:
+    if not isinstance(result, dict):
+        return "AI 服务返回异常"
+    base_resp = result.get("base_resp") or {}
+    if isinstance(base_resp, dict):
+        msg = base_resp.get("status_msg") or base_resp.get("message")
+        if msg:
+            return str(msg)
+    err = result.get("error") or {}
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("msg")
+        if msg:
+            return str(msg)
+    return "AI 服务未返回图片"
+
+def _generate_minimax_image(prompt: str, prefix: str, subject_image_url: str = "", aspect_ratio: str = "1:1"):
+    api_key = os.getenv("MINIMAX_API_KEY", "")
+    if not api_key:
+        return {"image_url": "", "error": "API Key未配置"}
+    last_error = ""
+    payload = {
+        "model": "image-01",
+        "prompt": prompt,
+        "aspect_ratio": aspect_ratio,
+        "n": 1,
+        "prompt_optimizer": True,
+        "response_format": "url",
+    }
+    if subject_image_url:
+        payload["subject_reference"] = [{"type": "character", "image_file": subject_image_url}]
+    for _ in range(2):
+        try:
+            resp = httpx.post(
+                "https://api.minimaxi.com/v1/image_generation",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=httpx.Timeout(90.0, read=150.0),
+            )
+            if resp.status_code >= 400:
+                last_error = f"AI 服务异常：{resp.status_code} {resp.text[:200]}"
+                continue
+            result = resp.json()
+            image_url = _extract_image_url(result)
+            if image_url:
+                return {"image_url": _save_generated_image(image_url, prefix)}
+            last_error = _extract_ai_error(result)
+        except httpx.TimeoutException:
+            last_error = "AI 图片生成超时，请稍后重试"
+        except Exception as e:
+            last_error = str(e)
+    return {"image_url": "", "error": last_error or "AI 图片生成失败"}
+
+def _optimize_product_image(product_name: str, category: str = "", image_url: str = ""):
+    if not product_name.strip():
+        return {"image_url": "", "error": "请先填写商品名称"}
+    subject_image_url = _public_image_url(image_url)
+    if image_url and not subject_image_url:
+        return {"image_url": "", "error": "原图地址无效，请使用已上传图片或完整图片链接"}
+    prompt = (
+        f"基于参考图中的同一件商品进行图片优化。商品名称：{product_name}，类目：{category}。"
+        "必须保持参考图商品主体一致，包括形状、颜色、材质纹理、珠子排列、比例和主要细节，"
+        "不要生成另一件商品。可以优化或替换背景、光线、阴影、清晰度和构图；"
+        "使用真实商品摄影风格，干净浅色或木质桌面背景，柔和自然光，主体居中，"
+        "适合小程序商城商品主图，无文字、无水印、无边框。"
+    )
+    result = _generate_minimax_image(prompt, "product_ai", subject_image_url)
+    if result.get("image_url"):
+        result["mode"] = "image_to_image" if subject_image_url else "text_to_image"
+        result["source_image_url"] = subject_image_url
+    return result
+
+
+def _optimize_banner_image(title: str = "", image_url: str = "", prompt: str = ""):
+    title = (title or "Banner").strip()
+    subject_image_url = _public_image_url(image_url)
+    if image_url and not subject_image_url:
+        return {"image_url": "", "error": "Invalid source image URL. Please use an uploaded image path or a full image URL."}
+    final_prompt = (
+        f"Create a WeChat mini-program ecommerce homepage banner based on the reference image. Theme: {title}. "
+        "Keep the original product or subject fully visible and recognizable. Do not crop the subject. "
+        "Preserve its core shape, material, color and proportions. Improve the background, lighting, clarity, shadow and composition. "
+        "Use a wide horizontal banner composition with enough breathing room on both sides, premium realistic product photography style. "
+        "No text, no watermark, no border. Suitable for a first-screen shopping banner."
+    )
+    if prompt:
+        final_prompt += " Additional requirements: " + prompt
+    result = _generate_minimax_image(final_prompt, "banner_ai", subject_image_url, "16:9")
+    if result.get("image_url"):
+        result["mode"] = "image_to_image" if subject_image_url else "text_to_image"
+        result["source_image_url"] = subject_image_url
+        result["scene"] = "banner"
+    return result
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -57,16 +171,26 @@ async def get_stats():
             today_users = cur.fetchone()["count"]
             cur.execute("SELECT COUNT(*) FROM products")
             total_products = cur.fetchone()["count"]
-            cur.execute("SELECT COUNT(*) FROM orders WHERE status IN ('pending', 'paid')")
-            pending_orders = cur.fetchone()["count"]
+            cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'pending'")
+            pending_payment_orders = cur.fetchone()["count"]
+            cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'paid'")
+            paid_orders = cur.fetchone()["count"]
             cur.execute("SELECT id, name, stock FROM products WHERE stock < 10 ORDER BY stock ASC LIMIT 5")
-            low_stock = [{"id": r["id"], "name": r["name"], "stock": r["stock"]} for r in cur.fetchall()]
+            low_stock = [{"id": str(r["id"]), "name": r["name"], "stock": r["stock"]} for r in cur.fetchall()]
             return {
                 "today_orders": today_orders, "today_sales": today_sales, "today_users": today_users,
-                "total_products": total_products, "pending_orders": pending_orders, "low_stock_products": low_stock
+                "total_products": total_products,
+                "pending_orders": paid_orders,
+                "paid_orders": paid_orders,
+                "pending_payment_orders": pending_payment_orders,
+                "low_stock_products": low_stock
             }
     except Exception:
-        return {"today_orders": 0, "today_sales": 0, "today_users": 0, "total_products": 0, "pending_orders": 0, "low_stock_products": []}
+        return {
+            "today_orders": 0, "today_sales": 0, "today_users": 0,
+            "total_products": 0, "pending_orders": 0, "paid_orders": 0,
+            "pending_payment_orders": 0, "low_stock_products": []
+        }
 
 # ===== 订单管理 =====
 @router.get("/orders")
@@ -163,9 +287,22 @@ async def update_order_status(order_id: str, status: str):
         raise HTTPException(status_code=400, detail="无效状态")
     try:
         with get_db_cursor() as cur:
-            cur.execute("UPDATE orders SET status = %s, updated_at = NOW() WHERE id = %s", (allowed[status], order_id))
-            if cur.rowcount == 0:
+            cur.execute("SELECT id, status FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+            order = cur.fetchone()
+            if not order:
                 raise HTTPException(status_code=404, detail="订单不存在")
+            old_status = order["status"]
+            new_status = allowed[status]
+            cur.execute("UPDATE orders SET status = %s, updated_at = NOW() WHERE id = %s", (new_status, order_id))
+            if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
+                cur.execute("""
+                    UPDATE products p
+                    SET stock = stock + oi.quantity,
+                        sales_count = GREATEST(0, sales_count - oi.quantity),
+                        updated_at = NOW()
+                    FROM order_items oi
+                    WHERE oi.order_id = %s AND p.id = oi.product_id
+                """, (order_id,))
         return {"success": True, "message": "更新成功"}
     except HTTPException:
         raise
@@ -257,19 +394,133 @@ def _call_minimax(prompt: str, timeout: float = 30.0) -> str:
     except Exception as e:
         return f"服务暂时不可用：{str(e)}"
 
+def _extract_stream_piece(payload):
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    return content, False
+            message = choice.get("message") or {}
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content:
+                    return content, True
+    if isinstance(payload, dict):
+        content = payload.get("content") or payload.get("text")
+        if isinstance(content, str) and content:
+            return content, False
+    return "", False
+
+async def _stream_minimax_messages(messages):
+    api_key = os.getenv("MINIMAX_API_KEY", "")
+    if not api_key:
+        yield "AI API Key is not configured."
+        return
+    emitted_text = ""
+    emitted = False
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, read=180.0)) as client:
+            async with client.stream(
+                "POST",
+                "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "MiniMax-M2.7-highspeed", "messages": messages, "stream": True},
+            ) as resp:
+                if resp.status_code >= 400:
+                    detail = (await resp.aread()).decode("utf-8", errors="ignore")[:300]
+                    yield f"AI service unavailable: {detail or resp.status_code}"
+                    return
+                async for line in resp.aiter_lines():
+                    line = (line or "").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if line == "[DONE]":
+                        break
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    piece, is_full = _extract_stream_piece(payload)
+                    if not piece:
+                        continue
+                    if is_full:
+                        if piece == emitted_text or piece.strip() == emitted_text.strip() or piece in emitted_text:
+                            chunk = ""
+                        elif piece.startswith(emitted_text):
+                            chunk = piece[len(emitted_text):]
+                            emitted_text = piece
+                        elif emitted_text and emitted_text.strip() and emitted_text.strip() in piece:
+                            idx = piece.find(emitted_text.strip())
+                            chunk = piece[idx + len(emitted_text.strip()):]
+                            emitted_text += chunk
+                        else:
+                            chunk = piece
+                            emitted_text += chunk
+                    else:
+                        chunk = piece
+                        emitted_text += chunk
+                    if chunk:
+                        emitted = True
+                        yield chunk
+        if not emitted:
+            yield "Done"
+    except Exception as e:
+        yield f"AI service unavailable: {str(e)}"
+
+def _stream_response(messages):
+    return StreamingResponse(
+        _stream_minimax_messages(messages),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 @router.get("/ai/analyze")
 async def ai_analyze(type: str = Query(...), data: str = Query("{}")):
     prompt = f"作为电商运营专家，分析以下数据并给出建议：\n{data}"
     return {"analysis": _call_minimax(prompt)}
+
+@router.get("/ai/analyze/stream")
+async def ai_analyze_stream(type: str = Query(...), data: str = Query("{}")):
+    prompt = f"Please answer in Chinese. As an ecommerce operations expert, analyze this dashboard data and give practical suggestions:\n{data}"
+    return _stream_response([{"role": "user", "content": prompt}])
 
 @router.get("/ai/generate_desc")
 async def generate_product_desc(product_name: str, category: str):
     prompt = f"为'{product_name}'（分类：{category}）写一段50-100字的商品描述，突出材质、工艺、收藏价值。语气高端典雅。"
     return {"description": _call_minimax(prompt)}
 
+@router.get("/ai/generate_desc/stream")
+async def generate_product_desc_stream(product_name: str, category: str):
+    prompt = f"Please answer in Chinese. Write a 50-100 Chinese character premium product description for product '{product_name}' in category '{category}'. Highlight material, craft, and collection value."
+    return _stream_response([{"role": "user", "content": prompt}])
+
+@router.get("/ai/polish_desc/stream")
+async def polish_product_desc_stream(product_name: str, category: str = "", description: str = ""):
+    prompt = (
+        "请用中文润色以下商品描述，保留真实信息，不夸大功效，不添加无法确认的产地、年份、证书或材质。"
+        "输出 80-140 字，语气高端、自然、有销售力，适合小程序商品详情页。\n"
+        f"商品名称：{product_name}\n分类：{category}\n原描述：{description}"
+    )
+    return _stream_response([{"role": "user", "content": prompt}])
+
 class AICallReq(BaseModel):
     message: str
     context: str = None
+
+class AIImageOptimizeReq(BaseModel):
+    product_name: str = ""
+    category: str = ""
+    image_url: str = ""
+    title: str = ""
+    scene: str = "product"
+    prompt: str = ""
 
 @router.post("/ai/chat")
 async def ai_chat(req: AICallReq):
@@ -294,43 +545,47 @@ async def ai_chat(req: AICallReq):
     except Exception as e:
         return {"message": f"服务暂时不可用：{str(e)}"}
 
+@router.post("/ai/chat/stream")
+async def ai_chat_stream(req: AICallReq):
+    system_prompt = "You are the AI operations assistant for Xiaoji micro mall. Reply in Chinese. Help analyze sales data, answer order and product questions, generate marketing copy, and provide practical operations suggestions."
+    messages = [{"role": "system", "content": system_prompt}]
+    if req.context:
+        messages.append({"role": "user", "content": req.context})
+    messages.append({"role": "user", "content": req.message})
+    return _stream_response(messages)
+
 @router.post("/ai/predict")
 async def ai_predict(type: str, data: dict):
     prompt = f"作为电商数据分析师，基于以下历史数据预测{type}趋势，给出预测结论和具体建议：\n{json.dumps(data, ensure_ascii=False)}"
     return {"prediction": _call_minimax(prompt)}
 
+@router.post("/ai/predict/stream")
+async def ai_predict_stream(type: str, data: dict):
+    prompt = f"Please answer in Chinese. As an ecommerce data analyst, predict the {type} trend from this history and provide conclusions plus concrete suggestions:\n{json.dumps(data, ensure_ascii=False)}"
+    return _stream_response([{"role": "user", "content": prompt}])
+
 # ===== 图片生成 & 上传 =====
 @router.get("/ai/generate_image")
 async def generate_product_image(product_name: str, category: str = ""):
     """用 MiniMax 图片生成模型为商品生成图片"""
-    import os
-    api_key = os.getenv("MINIMAX_API_KEY", "")
-    if not api_key:
-        return {"image_url": "", "error": "API Key未配置"}
-    try:
-        prompt = (
-            f"专业商品摄影风格，{category}类目：{product_name}，"
-            f"高端木质工艺品展示，纯色背景，光线柔和，8K超清，无文字无水印，"
-            f"适合电商主图"
-        )
-        resp = httpx.post(
-            "https://api.minimaxi.com/v1/image_generation",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "image-01",
-                "prompt": prompt,
-                "response_format": "url"
-            },
-            timeout=60.0
-        )
-        result = resp.json()
-        image_url = result.get("data", {}).get("image_urls", [""])[0]
-        if not image_url:
-            return {"image_url": "", "error": "生成失败，请重试"}
-        local_url = _save_generated_image(image_url, "product")
-        return {"image_url": local_url}
-    except Exception as e:
-        return {"image_url": "", "error": str(e)}
+    prompt = (
+        f"专业商品摄影风格，{category}类目：{product_name}，"
+        f"高端木质工艺品展示，纯色背景，光线柔和，8K超清，无文字无水印，"
+        f"适合电商主图"
+    )
+    return _generate_minimax_image(prompt, "product")
+
+@router.get("/ai/optimize_image")
+async def optimize_product_image(product_name: str, category: str = "", image_url: str = ""):
+    """Generate a polished ecommerce product image inspired by an existing uploaded image."""
+    return _optimize_product_image(product_name, category, image_url)
+
+@router.post("/ai/optimize_image")
+async def optimize_product_image_post(req: AIImageOptimizeReq):
+    """Generate a polished ecommerce product or banner image from JSON payload."""
+    if (req.scene or "").lower() == "banner":
+        return _optimize_banner_image(req.title or req.product_name, req.image_url, req.prompt)
+    return _optimize_product_image(req.product_name, req.category, req.image_url)
 
 @router.post("/upload/image")
 async def upload_product_image(file: UploadFile = File(...)):
