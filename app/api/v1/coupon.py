@@ -29,15 +29,15 @@ async def get_my_coupons(user: dict = Depends(get_current_user), status: str = "
     now = datetime.now()
     with get_db_cursor() as cursor:
         if status == "used":
-            cursor.execute("SELECT uc.id, uc.status, uc.used_at, uc.created_at, c.name, c.type, c.discount_amount, c.min_order_amount, c.end_time FROM user_coupons uc JOIN coupons c ON uc.coupon_id = c.id WHERE uc.user_id = %s AND uc.status = 'used' ORDER BY uc.used_at DESC", (user_id,))
+            cursor.execute("SELECT uc.id, uc.coupon_id, uc.status, uc.used_at, uc.created_at, c.name, c.type, c.discount_amount, c.min_order_amount, c.end_time FROM user_coupons uc JOIN coupons c ON uc.coupon_id = c.id WHERE uc.user_id = %s AND uc.status = 'used' ORDER BY uc.used_at DESC", (user_id,))
         elif status == "expired":
-            cursor.execute("SELECT uc.id, uc.status, uc.used_at, uc.created_at, c.name, c.type, c.discount_amount, c.min_order_amount, c.end_time FROM user_coupons uc JOIN coupons c ON uc.coupon_id = c.id WHERE uc.user_id = %s AND uc.status = 'unused' AND c.end_time < %s ORDER BY c.end_time DESC", (user_id, now))
+            cursor.execute("SELECT uc.id, uc.coupon_id, uc.status, uc.used_at, uc.created_at, c.name, c.type, c.discount_amount, c.min_order_amount, c.end_time FROM user_coupons uc JOIN coupons c ON uc.coupon_id = c.id WHERE uc.user_id = %s AND uc.status = 'unused' AND c.end_time < %s ORDER BY c.end_time DESC", (user_id, now))
         else:
-            cursor.execute("SELECT uc.id, uc.status, uc.used_at, uc.created_at, c.name, c.type, c.discount_amount, c.min_order_amount, c.end_time FROM user_coupons uc JOIN coupons c ON uc.coupon_id = c.id WHERE uc.user_id = %s AND uc.status = 'unused' AND c.end_time >= %s ORDER BY c.end_time ASC", (user_id, now))
+            cursor.execute("SELECT uc.id, uc.coupon_id, uc.status, uc.used_at, uc.created_at, c.name, c.type, c.discount_amount, c.min_order_amount, c.end_time FROM user_coupons uc JOIN coupons c ON uc.coupon_id = c.id WHERE uc.user_id = %s AND uc.status = 'unused' AND c.end_time >= %s ORDER BY c.end_time ASC", (user_id, now))
         coupons = cursor.fetchall()
     items = []
     for c in coupons:
-        items.append({"id": str(c["id"]), "name": c["name"], "type": c["type"], "discount_amount": str(c["discount_amount"]), "min_order_amount": str(c["min_order_amount"]), "status": c["status"], "end_time": c["end_time"].isoformat() if c["end_time"] else None, "used_at": c["used_at"].isoformat() if c["used_at"] else None, "created_at": c["created_at"].isoformat() if c["created_at"] else None})
+        items.append({"id": str(c["id"]), "user_coupon_id": str(c["id"]), "coupon_id": str(c["coupon_id"]), "name": c["name"], "type": c["type"], "discount_amount": str(c["discount_amount"]), "min_order_amount": str(c["min_order_amount"]), "status": c["status"], "end_time": c["end_time"].isoformat() if c["end_time"] else None, "used_at": c["used_at"].isoformat() if c["used_at"] else None, "created_at": c["created_at"].isoformat() if c["created_at"] else None})
     return success_response(data={"items": items})
 
 @router.post("/user/coupons/{coupon_id}/receive")

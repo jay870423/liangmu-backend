@@ -39,7 +39,7 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
     body = await req.json()
     address_id = body.get("address_id")
     delivery_type = body.get("delivery_type", "express")
-    coupon_id = body.get("coupon_id")
+    coupon_id = str(body.get("coupon_id") or "").strip()
     use_points = body.get("use_points", 0)
 
     try:
@@ -131,18 +131,21 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
 
             if coupon_id:
                 cursor.execute("""
-                    SELECT uc.id AS user_coupon_id, c.discount_amount, c.min_order_amount
+                    SELECT uc.id AS user_coupon_id, uc.coupon_id, c.discount_amount, c.min_order_amount
                     FROM user_coupons uc
                     JOIN coupons c ON c.id = uc.coupon_id
-                    WHERE c.id = %s AND uc.user_id = %s AND uc.status = 'unused' AND c.end_time > %s
+                    WHERE (c.id::text = %s OR uc.id::text = %s)
+                      AND uc.user_id = %s
+                      AND uc.status = 'unused'
+                      AND c.end_time > %s
                     FOR UPDATE OF uc
-                """, (coupon_id, user_id, datetime.now()))
+                """, (coupon_id, coupon_id, user_id, datetime.now()))
                 coupon = cursor.fetchone()
                 if not coupon:
                     raise OrderCreateError(2004, "优惠券不可用")
                 if total_amount < float(coupon["min_order_amount"]):
                     raise OrderCreateError(2004, f"订单金额未达门槛: {coupon['min_order_amount']}元")
-                coupon_amount = float(coupon["discount_amount"])
+                coupon_amount = min(float(coupon["discount_amount"]), total_amount + freight_amount)
 
             points_used = 0
             available_points = 0
@@ -190,8 +193,8 @@ async def create_order(req: Request, user: dict = Depends(get_current_user)):
 
             if coupon_id:
                 cursor.execute(
-                    "UPDATE user_coupons SET status = 'used', order_id = %s, used_at = %s WHERE user_id = %s AND coupon_id = %s AND status = 'unused'",
-                    (order_id, datetime.now(), user_id, coupon_id),
+                    "UPDATE user_coupons SET status = 'used', order_id = %s, used_at = %s WHERE id = %s AND user_id = %s AND status = 'unused'",
+                    (order_id, datetime.now(), coupon["user_coupon_id"], user_id),
                 )
                 if cursor.rowcount != 1:
                     raise OrderCreateError(2004, "优惠券不可用")
@@ -428,6 +431,10 @@ async def cancel_order(order_id: str, user: dict = Depends(get_current_user)):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = %s", (order_id,))
         cursor.execute("UPDATE products p SET stock = stock + oi.quantity FROM order_items oi WHERE oi.order_id = %s AND p.id = oi.product_id", (order_id,))
+        cursor.execute(
+            "UPDATE user_coupons SET status = 'unused', order_id = NULL, used_at = NULL WHERE order_id = %s AND user_id = %s AND status = 'used'",
+            (order_id, user_id),
+        )
         if order["points_used"] > 0:
             cursor.execute("UPDATE users SET available_points = available_points + %s WHERE id = %s RETURNING available_points", (order["points_used"], user_id))
             balance = cursor.fetchone()["available_points"]
