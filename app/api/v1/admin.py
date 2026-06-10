@@ -146,9 +146,10 @@ def _optimize_banner_image(title: str = "", image_url: str = "", prompt: str = "
         return {"image_url": "", "error": "Invalid source image URL. Please use an uploaded image path or a full image URL."}
     final_prompt = (
         f"Create a WeChat mini-program ecommerce homepage banner based on the reference image. Theme: {title}. "
-        "Keep the original product or subject fully visible and recognizable. Do not crop the subject. "
+        "The final image must be a wide horizontal 16:9 banner, optimized for a mobile carousel slot around 750x420. "
+        "Keep the original product or subject fully visible and recognizable, centered with safe margins on all sides. Do not crop the subject. "
         "Preserve its core shape, material, color and proportions. Improve the background, lighting, clarity, shadow and composition. "
-        "Use a wide horizontal banner composition with enough breathing room on both sides, premium realistic product photography style. "
+        "Use a wide horizontal banner composition with enough breathing room on both sides and top/bottom, premium realistic product photography style. "
         "No text, no watermark, no border. Suitable for a first-screen shopping banner."
     )
     if prompt:

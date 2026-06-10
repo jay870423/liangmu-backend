@@ -1,4 +1,5 @@
 """首页模块API（小程序端 + 管理端）"""
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional, List
@@ -12,8 +13,14 @@ from app.database import get_db_cursor
 
 router = APIRouter()
 
+def money(value):
+    amount = Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{amount:.2f}"
+
 ASSET_UPLOAD_DIR = "/home/ubuntu/liangmu-admin/assets/uploads"
 ASSET_UPLOAD_PREFIX = "/assets/uploads"
+BANNER_ASPECT_RATIO = "16:9"
+BANNER_SIZE_HINT = "750x420"
 os.makedirs(ASSET_UPLOAD_DIR, exist_ok=True)
 
 def _ext_from_content_type(content_type: str, default: str = ".jpg") -> str:
@@ -62,14 +69,15 @@ async def get_home_categories():
 @router.get("/home/new")
 async def get_home_new(limit: int = 10):
     with get_db_cursor() as cursor:
-        cursor.execute("SELECT id, name, subtitle, price, original_price, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY created_at DESC LIMIT %s", (limit,))
+        cursor.execute("SELECT id, name, subtitle, price, original_price, shipping_fee, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY created_at DESC LIMIT %s", (limit,))
         products = cursor.fetchall()
     items = []
     for p in products:
         images = p["images"] or []
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
-            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "price": money(p["price"]), "original_price": money(p["original_price"]),
+            "shipping_fee": money(p["shipping_fee"]),
             "main_image": images[0] if images else "",
             "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
         })
@@ -78,14 +86,15 @@ async def get_home_new(limit: int = 10):
 @router.get("/home/recommend")
 async def get_home_recommend(limit: int = 10):
     with get_db_cursor() as cursor:
-        cursor.execute("SELECT id, name, subtitle, price, original_price, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY RANDOM() LIMIT %s", (limit,))
+        cursor.execute("SELECT id, name, subtitle, price, original_price, shipping_fee, images, sales_count, rating FROM products WHERE is_on_sale = true ORDER BY RANDOM() LIMIT %s", (limit,))
         products = cursor.fetchall()
     items = []
     for p in products:
         images = p["images"] or []
         items.append({
             "id": str(p["id"]), "name": p["name"], "subtitle": p["subtitle"] or "",
-            "price": int(p["price"]), "original_price": int(p["original_price"]) if p["original_price"] else 0,
+            "price": money(p["price"]), "original_price": money(p["original_price"]),
+            "shipping_fee": money(p["shipping_fee"]),
             "main_image": images[0] if images else "",
             "sales": p["sales_count"] or 0, "rating": float(p["rating"]) if p["rating"] else 5.0
         })
@@ -181,17 +190,27 @@ async def generate_banner_image(
         return {"image_url": "", "error": "API Key未配置"}
     try:
         prompt = (
-            f"电商平台轮播横幅海报，主题：{banner_title}，"
-            f"风格：高端木质工艺品/文玩类，清新纯色背景，专业商业摄影，"
-            f"光线柔和，8K超清，无文字无水印，适合电商首页轮播图"
+            f"微信小程序商城首页轮播横幅图，主题：{banner_title}，"
+            f"画面比例必须为横向 {BANNER_ASPECT_RATIO}，适配小程序轮播位 {BANNER_SIZE_HINT}，"
+            "主体完整居中并横向铺开，主体上下左右都留出安全边距，不要裁切主体，"
+            "构图适合手机首屏轮播展示，远看清楚，近看有细节，"
+            "风格：高端木质工艺品/文玩类，清新纯色或高级木质背景，专业商业摄影，"
+            "光线柔和，8K超清，无文字、无水印、无边框。"
         )
         if banner_desc:
-            prompt += f"，意境：{banner_desc}"
+            prompt += f" 画面描述：{banner_desc}。请严格围绕该描述生成，不要生成方图或竖图。"
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 "https://api.minimaxi.com/v1/image_generation",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": "image-01", "prompt": prompt, "response_format": "url"}
+                json={
+                    "model": "image-01",
+                    "prompt": prompt,
+                    "aspect_ratio": BANNER_ASPECT_RATIO,
+                    "n": 1,
+                    "prompt_optimizer": True,
+                    "response_format": "url",
+                }
             )
         result = resp.json()
         image_url = result.get("data", {}).get("image_urls", [""])[0]
