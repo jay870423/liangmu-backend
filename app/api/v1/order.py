@@ -16,6 +16,7 @@ from app.services.wechat_pay import (
     jsapi_prepay,
     verify_notify_signature,
 )
+from app.services.notification_service import create_payment_success_notification
 from app.utils.response import error_response, page_response, success_response
 
 
@@ -401,6 +402,13 @@ async def initiate_payment(order_id: str, user: dict = Depends(get_current_user)
                 "UPDATE orders SET status = 'paid', pay_time = %s, updated_at = NOW() WHERE id = %s AND status = 'pending'",
                 (datetime.now(), order_id),
             )
+            create_payment_success_notification(
+                cursor,
+                user_id=user_id,
+                order_id=order_id,
+                order_no=order["order_no"],
+                amount=order["pay_amount"],
+            )
             conn.commit()
         return success_response(data={"paid": True})
 
@@ -515,7 +523,7 @@ async def wechat_pay_notify(req: Request):
 
     with get_db() as conn:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT id, pay_amount, status FROM orders WHERE order_no = %s FOR UPDATE", (order_no,))
+        cursor.execute("SELECT id, user_id, order_no, pay_amount, status FROM orders WHERE order_no = %s FOR UPDATE", (order_no,))
         order = cursor.fetchone()
         if not order:
             return JSONResponse(status_code=404, content={"code": "FAIL", "message": "Order not found"})
@@ -526,6 +534,13 @@ async def wechat_pay_notify(req: Request):
             cursor.execute(
                 "UPDATE orders SET status = 'paid', pay_time = %s, updated_at = NOW() WHERE order_no = %s AND status = 'pending'",
                 (datetime.now(), order_no),
+            )
+            create_payment_success_notification(
+                cursor,
+                user_id=str(order["user_id"]),
+                order_id=str(order["id"]),
+                order_no=order["order_no"],
+                amount=order["pay_amount"],
             )
         conn.commit()
 

@@ -1,10 +1,11 @@
 from fastapi import APIRouter
-from app.api.v1 import user, product, category, cart, order, coupon, points, address, favorite, home
+from app.api.v1 import user, product, category, cart, order, coupon, points, address, favorite, home, notification
 from app.api.v1.admin import router as admin_router
 from app.api.v1.banner_admin import router as banner_admin_router
 from app.api.v1.category_admin import router as category_admin_router
 from app.api.v1.coupon_admin import router as coupon_admin_router
 from app.api.v1.product_admin import router as product_admin_router
+from app.api.v1.notification_admin import router as notification_admin_router
 
 router = APIRouter()
 router.include_router(user.router, tags=["用户模块"])
@@ -17,8 +18,10 @@ router.include_router(points.router, tags=["积分模块"])
 router.include_router(address.router, tags=["地址模块"])
 router.include_router(favorite.router, tags=["收藏模块"])
 router.include_router(home.router, tags=["首页模块"])
+router.include_router(notification.router, tags=["notification"])
 router.include_router(admin_router)
 router.include_router(banner_admin_router)
 router.include_router(category_admin_router)
 router.include_router(coupon_admin_router)
 router.include_router(product_admin_router)
+router.include_router(notification_admin_router)
